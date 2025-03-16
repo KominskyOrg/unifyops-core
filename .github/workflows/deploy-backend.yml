@@ -1,0 +1,121 @@
+name: Deploy Backend to EC2
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+
+jobs:
+  deploy:
+    environment: dev
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f backend/requirements.txt ]; then
+            pip install -r backend/requirements.txt
+          fi
+      
+      - name: Run tests
+        run: |
+          if [ -d backend/app/tests ]; then
+            cd backend
+            pytest app/tests/
+          else
+            echo "No tests found, skipping tests"
+          fi
+      
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+      
+      - name: Setup known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+      
+      - name: Deploy to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+          APP_DIR: ${{ secrets.APP_DIR || '/home/ec2-user/unifyops-backend' }}
+        run: |
+          # Create deployment package
+          echo "Creating deployment package..."
+          mkdir -p deploy
+          cp -r backend/* deploy/
+          tar -czf deploy.tar.gz deploy
+          
+          # Ensure the target directory exists on the server
+          ssh $EC2_USERNAME@$EC2_HOST "mkdir -p $APP_DIR"
+          
+          # Transfer files
+          echo "Transferring files to EC2..."
+          scp deploy.tar.gz $EC2_USERNAME@$EC2_HOST:$APP_DIR/
+          
+          # Extract and setup on the server
+          echo "Setting up application on the server..."
+          ssh $EC2_USERNAME@$EC2_HOST << 'EOF'
+            cd $APP_DIR
+            tar -xzf deploy.tar.gz
+            
+            # Install dependencies if needed
+            if [ -f deploy/requirements.txt ]; then
+              python3 -m pip install -r deploy/requirements.txt
+            fi
+            
+            # Move files to the appropriate location
+            cp -r deploy/* ./
+            rm -rf deploy deploy.tar.gz
+            
+            # Restart the application (assuming using systemd)
+            if systemctl is-active --quiet unifyops-backend.service; then
+              sudo systemctl restart unifyops-backend.service
+            else
+              echo "Service not found. You may need to set up the service manually."
+            fi
+          EOF
+      
+      - name: Health check
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL || 'http://${{ secrets.EC2_HOST }}:8000/api/v1/health' }}
+          MAX_RETRIES: 5
+          RETRY_DELAY: 10
+        run: |
+          echo "Performing health check..."
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Health check attempt $i of $MAX_RETRIES"
+            
+            if curl -s -f -m 10 $HEALTH_CHECK_URL; then
+              echo "Health check passed!"
+              exit 0
+            fi
+            
+            echo "Health check failed, retrying in $RETRY_DELAY seconds..."
+            sleep $RETRY_DELAY
+          done
+          
+          echo "Health check failed after $MAX_RETRIES attempts"
+          exit 1

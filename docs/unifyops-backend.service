@@ -1,0 +1,19 @@
+[Unit]
+Description=UnifyOps Backend Service
+After=network.target
+
+[Service]
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/unifyops-backend
+Environment="PATH=/home/ec2-user/unifyops-backend/venv/bin"
+EnvironmentFile=/home/ec2-user/unifyops-backend/.env
+ExecStart=/home/ec2-user/unifyops-backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=unifyops-backend
+
+[Install]
+WantedBy=multi-user.target
