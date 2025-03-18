@@ -9,6 +9,7 @@ BUILD_IMAGE=true
 PUSH_IMAGE=true
 DEPLOY=true
 IMAGE_TAG="latest"
+DEBUG=false
 
 # Process command line arguments
 while [[ $# -gt 0 ]]; do
@@ -38,6 +39,10 @@ while [[ $# -gt 0 ]]; do
       PUSH_IMAGE=false  # Skip push when using --deploy-only as we assume image is already in ECR
       shift
       ;;
+    --debug)
+      DEBUG=true
+      shift
+      ;;
     --help)
       echo "Usage: $0 [options]"
       echo "Options:"
@@ -47,6 +52,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --no-push        Build image but don't push to ECR"
       echo "  --build-only     Build and push image but don't deploy to EC2"
       echo "  --deploy-only    Only deploy existing image (implies --no-build)"
+      echo "  --debug          Enable verbose debugging output"
       echo "  --help           Show this help message"
       exit 0
       ;;
@@ -151,6 +157,25 @@ if [ "$DEPLOY" = true ]; then
   if [ -f ".env.$ENV" ]; then
     # Read environment variables from .env file and format for docker run command
     ENV_ARGS=$(grep -v '^#' .env.$ENV | sed 's/^/-e /' | tr '\n' ' ')
+    if [ "$DEBUG" = true ]; then
+      echo "Environment arguments: $ENV_ARGS"
+    fi
+  fi
+  
+  if [ "$DEBUG" = true ]; then
+    echo "DEBUG: Verifying image exists in ECR..."
+    aws ecr describe-images --repository-name $ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG || echo "WARNING: Image with tag $IMAGE_TAG not found in ECR repository"
+    
+    echo "DEBUG: Verifying EC2 instance exists..."
+    aws ec2 describe-instances --instance-ids $EC2_INSTANCE_ID --query "Reservations[].Instances[].State.Name" --output text || echo "WARNING: EC2 instance $EC2_INSTANCE_ID not found or not accessible"
+    
+    echo "DEBUG: Deployment command to be executed:"
+    echo "aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY"
+    echo "docker pull $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG"
+    echo "docker stop unifyops-api-$ENV || true"
+    echo "docker rm unifyops-api-$ENV || true"
+    echo "docker run -d --name unifyops-api-$ENV -p 8000:8000 $ENV_ARGS $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG"
+    echo "docker system prune -af"
   fi
   
   # Deploy using SSM Run Command
@@ -239,6 +264,19 @@ if [ "$DEPLOY" = true ]; then
         --instance-id $EC2_INSTANCE_ID \
         --query "StandardOutputContent" \
         --output text
+      
+      echo "Fetching standard error output..."
+      aws ssm get-command-invocation \
+        --command-id $COMMAND_ID \
+        --instance-id $EC2_INSTANCE_ID \
+        --query "StandardErrorContent" \
+        --output text
+      
+      # Additional diagnostic info
+      echo "Image tag being deployed: $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG"
+      echo "Checking if image exists in ECR..."
+      aws ecr describe-images --repository-name $ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG || echo "Image with tag $IMAGE_TAG not found in ECR repository"
+      
       exit 1
     else
       sleep 5

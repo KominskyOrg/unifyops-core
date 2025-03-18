@@ -119,7 +119,7 @@ jobs:
           
           # Deploy using the script (with environment flag)
           chmod +x ./scripts/build_and_deploy.sh
-          ./scripts/build_and_deploy.sh --env ${{ env.ENV }} --no-build --deploy-only
+          ./scripts/build_and_deploy.sh --env ${{ env.ENV }} --no-build --deploy-only --tag $IMAGE_TAG --debug
       
       - name: Deployment summary
         run: |

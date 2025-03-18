@@ -57,5 +57,11 @@ docker-down:
 # ECR-specific target for CI environments
 ci-ecr-push:
 	@echo "Pushing to ECR repository: $(ECR_REGISTRY)/$(ECR_REPOSITORY):$(IMAGE_TAG)"
+	@echo "Checking AWS ECR login..."
+	aws ecr get-login-password --region $${AWS_REGION} | docker login --username AWS --password-stdin $(ECR_REGISTRY)
+	@echo "Tagging image..."
 	docker tag unifyops-api:latest $(ECR_REGISTRY)/$(ECR_REPOSITORY):$(IMAGE_TAG)
+	@echo "Pushing image..."
 	docker push $(ECR_REGISTRY)/$(ECR_REPOSITORY):$(IMAGE_TAG)
+	@echo "Verifying image exists in ECR..."
+	aws ecr describe-images --repository-name $(ECR_REPOSITORY) --image-ids imageTag=$(IMAGE_TAG)
