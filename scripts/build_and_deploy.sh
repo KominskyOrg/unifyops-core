@@ -1,5 +1,5 @@
 #!/bin/bash
-# Comprehensive build and deploy script for UnifyOps backend
+# Comprehensive build and deploy script for UnifyOps Core
 
 set -e # Exit on error
 
@@ -151,9 +151,9 @@ if [ "$DEPLOY" = true ]; then
     --parameters "commands=[
       'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY',
       'docker pull $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG',
-      'docker stop unifyops-backend-$ENV || true',
-      'docker rm unifyops-backend-$ENV || true',
-      'docker run -d --name unifyops-backend-$ENV -p 8000:8000 $ENV_ARGS $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG',
+      'docker stop unifyops-api-$ENV || true',
+      'docker rm unifyops-api-$ENV || true',
+      'docker run -d --name unifyops-api-$ENV -p 8000:8000 $ENV_ARGS $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG',
       'docker system prune -af'
     ]" \
     --output text --query "Command.CommandId")
@@ -192,7 +192,7 @@ if [ "$DEPLOY" = true ]; then
           '  fi',
           'done',
           'echo \"Health check failed after 10 attempts\"',
-          'docker logs unifyops-backend-$ENV',
+          'docker logs unifyops-api-$ENV',
           'exit 1'
         ]" \
         --output text --query "Command.CommandId")

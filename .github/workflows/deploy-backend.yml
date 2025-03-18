@@ -90,7 +90,7 @@ jobs:
           fi
       
       - name: Build Docker image
-        run: make docker-build
+        run: make ci-docker-build
       
       - name: Tag and push image to ECR
         id: build-image

@@ -40,6 +40,13 @@ clean:
 docker-build:
 	docker-compose build
 
+# CI-friendly alternative that doesn't use docker-compose
+ci-docker-build:
+	docker build -t unifyops-api:latest \
+		--build-arg ENV=${ENV:-development} \
+		--build-arg BUILD_TIMESTAMP=$(shell date +%Y%m%d%H%M%S) \
+		.
+
 docker-up:
 	docker-compose up
 
