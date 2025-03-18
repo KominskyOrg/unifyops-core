@@ -174,7 +174,7 @@ if [ "$DEPLOY" = true ]; then
     echo "docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
     echo "docker stop unifyops-api-$ENV || true"
     echo "docker rm unifyops-api-$ENV || true"
-    echo "docker run -d --name unifyops-api-$ENV -p 8000:8000 $ENV_ARGS $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG"
+    echo "docker run -d --name unifyops-api-$ENV -p 8000:8000 $ENV_ARGS $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
     echo "docker system prune -af"
   fi
   
@@ -185,7 +185,7 @@ if [ "$DEPLOY" = true ]; then
     --document-name "AWS-RunShellScript" \
     --parameters "commands=[
       'set -x',
-      'aws ecr get-login-password --region  | docker login --username AWS --password-stdin 605134435978.dkr.ecr.us-east-1.amazonaws.com',
+      'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY',
       'docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG',
       'docker stop unifyops-api-$ENV || true',
       'docker rm unifyops-api-$ENV || true',
