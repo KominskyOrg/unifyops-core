@@ -171,7 +171,7 @@ if [ "$DEPLOY" = true ]; then
     
     echo "DEBUG: Deployment command to be executed:"
     echo "aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY"
-    echo "docker pull $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG"
+    echo "docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
     echo "docker stop unifyops-api-$ENV || true"
     echo "docker rm unifyops-api-$ENV || true"
     echo "docker run -d --name unifyops-api-$ENV -p 8000:8000 $ENV_ARGS $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG"
@@ -185,11 +185,11 @@ if [ "$DEPLOY" = true ]; then
     --document-name "AWS-RunShellScript" \
     --parameters "commands=[
       'set -x',
-      'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY',
-      'docker pull $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG',
+      'aws ecr get-login-password --region  | docker login --username AWS --password-stdin 605134435978.dkr.ecr.us-east-1.amazonaws.com',
+      'docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG',
       'docker stop unifyops-api-$ENV || true',
       'docker rm unifyops-api-$ENV || true',
-      'docker run -d --name unifyops-api-$ENV -p 8000:8000 $ENV_ARGS $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG',
+      'docker run -d --name unifyops-api-$ENV -p 8000:8000 $ENV_ARGS $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG',
       'docker system prune -af',
       'echo \"Running health check...\"',
       'sleep 5',
@@ -292,7 +292,7 @@ if [ "$DEPLOY" = true ]; then
         --output text
       
       # Additional diagnostic info
-      echo "Image tag being deployed: $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG"
+      echo "Image tag being deployed: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
       echo "Checking if image exists in ECR..."
       aws ecr describe-images --repository-name $ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG || echo "Image with tag $IMAGE_TAG not found in ECR repository"
       
@@ -306,7 +306,7 @@ if [ "$DEPLOY" = true ]; then
   echo "Deployment Summary"
   echo "==============================================="
   echo "Environment: $ENV"
-  echo "Deployed Image: $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG"
+  echo "Deployed Image: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
   echo "EC2 Instance ID: $EC2_INSTANCE_ID"
   echo "Status: DEPLOYED"
   echo "==============================================="
