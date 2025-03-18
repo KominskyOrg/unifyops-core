@@ -93,7 +93,7 @@ if [ -z "$EC2_INSTANCE_ID" ] && [ "$DEPLOY" = true ]; then
 fi
 
 # Get AWS ECR registry URI
-ECR_REGISTRY=${ECR_REGISTRY:-$(aws ecr describe-repositories --repository-names $ECR_REPOSITORY --query 'repositories[0].repositoryUri' --output text | sed "s/$ECR_REPOSITORY//")}
+ECR_REGISTRY=${ECR_REGISTRY:-$(aws ecr describe-repositories --repository-names $ECR_REPOSITORY --query 'repositories[0].repositoryUri' --output text | sed "s|/$ECR_REPOSITORY||")}
 
 echo "==============================================="
 echo "UnifyOps Core Build & Deploy"
@@ -156,7 +156,7 @@ if [ "$DEPLOY" = true ]; then
   ENV_ARGS=""
   if [ -f ".env.$ENV" ]; then
     # Read environment variables from .env file and format for docker run command
-    ENV_ARGS=$(grep -v '^#' .env.$ENV | sed 's/^/-e /' | tr '\n' ' ')
+    ENV_ARGS=$(grep -v '^#' .env.$ENV | grep -v '^\s*$' | sed 's/^/-e /' | tr '\n' ' ')
     if [ "$DEBUG" = true ]; then
       echo "Environment arguments: $ENV_ARGS"
     fi
