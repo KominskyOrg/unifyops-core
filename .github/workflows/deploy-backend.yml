@@ -1,9 +1,11 @@
-name: Deploy Backend to EC2
+name: Deploy Backend to EC2 with Docker
 
 on:
   push:
     branches:
       - main
+    paths:
+      - 'backend/**'
   pull_request:
     types:
       - closed
@@ -11,11 +13,21 @@ on:
       - main
     paths:
       - 'backend/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
 
 jobs:
-  deploy:
-    environment: dev
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+  test:
+    name: Test Backend
     runs-on: ubuntu-latest
     
     steps:
@@ -30,90 +42,197 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f backend/requirements.txt ]; then
-            pip install -r backend/requirements.txt
-          fi
+          pip install -r backend/requirements.txt
       
       - name: Run tests
         run: |
-          if [ -d backend/app/tests ]; then
-            cd backend
-            pytest app/tests/
+          cd backend
+          pytest app/tests/ -v
+
+  build-and-deploy:
+    name: Build and Deploy
+    needs: test
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+            echo "env=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
           else
-            echo "No tests found, skipping tests"
+            echo "ENV=dev" >> $GITHUB_ENV
+            echo "env=dev" >> $GITHUB_OUTPUT
           fi
       
-      - name: Configure SSH
-        uses: webfactory/ssh-agent@v0.7.0
-        with:
-          ssh-private-key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-      
-      - name: Setup known_hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
-      
-      - name: Deploy to EC2
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
-          APP_DIR: ${{ secrets.APP_DIR || '/home/ec2-user/unifyops-backend' }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+          BUILD_TIMESTAMP: $(date +%Y%m%d%H%M%S)
         run: |
-          # Create deployment package
-          echo "Creating deployment package..."
-          mkdir -p deploy
-          cp -r backend/* deploy/
-          tar -czf deploy.tar.gz deploy
+          # Build a docker container and push it to ECR
+          cd backend
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            --build-arg ENV=${{ env.ENV }} \
+            --build-arg BUILD_TIMESTAMP=$BUILD_TIMESTAMP \
+            .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+      
+      - name: Create environment variables file
+        run: |
+          # Create environment variables file for the container
+          cd backend
+          if [ -f ".env.${{ env.ENV }}" ]; then
+            echo "Using existing .env.${{ env.ENV }} file"
+          else
+            echo "Creating .env.${{ env.ENV }} file with default values"
+            cat > .env.${{ env.ENV }} << EOL
+          # ${{ env.ENV }} Environment Configuration
+          ENVIRONMENT=${{ env.ENV == 'prod' && 'production' || 'development' }}
+          LOG_LEVEL=${{ env.ENV == 'prod' && 'info' || 'debug' }}
+          API_HOST=0.0.0.0
+          API_PORT=8000
+          API_RELOAD=${{ env.ENV == 'prod' && 'false' || 'true' }}
+          CORS_ORIGINS=${{ env.ENV == 'prod' && secrets.CORS_ORIGINS || 'http://localhost:3000,http://localhost:8000' }}
+          EOL
+          fi
           
-          # Ensure the target directory exists on the server
-          ssh $EC2_USERNAME@$EC2_HOST "mkdir -p $APP_DIR"
+          # Format environment variables for docker run command
+          ENV_ARGS=$(grep -v '^#' .env.${{ env.ENV }} | sed 's/^/-e /' | tr '\n' ' ')
+          echo "ENV_ARGS=${ENV_ARGS}" >> $GITHUB_ENV
+      
+      - name: Deploy to EC2 using AWS SSM
+        env:
+          INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Deploy container using SSM
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids $INSTANCE_ID \
+            --document-name "AWS-RunShellScript" \
+            --parameters "commands=[
+              'aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY',
+              'docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG',
+              'docker stop unifyops-backend-${{ env.ENV }} || true',
+              'docker rm unifyops-backend-${{ env.ENV }} || true',
+              'docker run -d --name unifyops-backend-${{ env.ENV }} -p 8000:8000 ${{ env.ENV_ARGS }} $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG',
+              'docker system prune -af'
+            ]" \
+            --output text --query "Command.CommandId")
           
-          # Transfer files
-          echo "Transferring files to EC2..."
-          scp deploy.tar.gz $EC2_USERNAME@$EC2_HOST:$APP_DIR/
+          echo "Deployment initiated with command ID: $COMMAND_ID"
+          echo "Waiting for deployment to complete..."
           
-          # Extract and setup on the server
-          echo "Setting up application on the server..."
-          ssh $EC2_USERNAME@$EC2_HOST << 'EOF'
-            cd $APP_DIR
-            tar -xzf deploy.tar.gz
+          # Wait for command completion
+          while true; do
+            COMMAND_STATUS=$(aws ssm list-commands \
+              --command-id $COMMAND_ID \
+              --query "Commands[0].Status" \
+              --output text)
             
-            # Install dependencies if needed
-            if [ -f deploy/requirements.txt ]; then
-              python3 -m pip install -r deploy/requirements.txt
-            fi
+            echo "Deployment status: $COMMAND_STATUS"
             
-            # Move files to the appropriate location
-            cp -r deploy/* ./
-            rm -rf deploy deploy.tar.gz
-            
-            # Restart the application (assuming using systemd)
-            if systemctl is-active --quiet unifyops-backend.service; then
-              sudo systemctl restart unifyops-backend.service
+            if [ "$COMMAND_STATUS" = "Success" ]; then
+              echo "Deployment completed successfully!"
+              break
+            elif [ "$COMMAND_STATUS" = "Failed" ]; then
+              echo "Deployment failed!"
+              aws ssm get-command-invocation \
+                --command-id $COMMAND_ID \
+                --instance-id $INSTANCE_ID \
+                --query "StandardOutputContent" \
+                --output text
+              exit 1
             else
-              echo "Service not found. You may need to set up the service manually."
+              sleep 10
             fi
-          EOF
+          done
       
-      - name: Health check
+      - name: Health check from within EC2
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL || 'http://${{ secrets.EC2_HOST }}:8000/api/v1/health' }}
-          MAX_RETRIES: 5
-          RETRY_DELAY: 10
+          INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
         run: |
-          echo "Performing health check..."
-          for i in $(seq 1 $MAX_RETRIES); do
-            echo "Health check attempt $i of $MAX_RETRIES"
+          echo "Waiting for application to start..."
+          sleep 20
+          
+          # Run health check from within the EC2 instance using SSM
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids $INSTANCE_ID \
+            --document-name "AWS-RunShellScript" \
+            --parameters "commands=[
+              'for i in {1..10}; do',
+              '  echo \"Health check attempt $i...\"',
+              '  STATUS_CODE=$(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/api/v1/health)',
+              '  if [ \"$STATUS_CODE\" = \"200\" ]; then',
+              '    echo \"Application is healthy\"',
+              '    exit 0',
+              '  else',
+              '    echo \"Application not ready yet (status: $STATUS_CODE), waiting...\"',
+              '    sleep 10',
+              '  fi',
+              'done',
+              'echo \"Health check failed after 10 attempts\"',
+              'docker logs unifyops-backend-${{ env.ENV }}',
+              'exit 1'
+            ]" \
+            --output text --query "Command.CommandId")
+          
+          echo "Health check command ID: $COMMAND_ID"
+          
+          # Wait for the command to complete
+          for i in {1..12}; do
+            COMMAND_STATUS=$(aws ssm list-commands \
+              --command-id $COMMAND_ID \
+              --query "Commands[0].Status" \
+              --output text)
             
-            if curl -s -f -m 10 $HEALTH_CHECK_URL; then
-              echo "Health check passed!"
-              exit 0
+            echo "Health check command status: $COMMAND_STATUS"
+            
+            if [ "$COMMAND_STATUS" = "Success" ]; then
+              echo "Health check passed! Application is running."
+              break
+            elif [ "$COMMAND_STATUS" = "Failed" ]; then
+              echo "Health check failed!"
+              aws ssm get-command-invocation \
+                --command-id $COMMAND_ID \
+                --instance-id $INSTANCE_ID \
+                --query "StandardOutputContent" \
+                --output text
+              exit 1
+            else
+              echo "Waiting for health check to complete..."
+              sleep 10
             fi
-            
-            echo "Health check failed, retrying in $RETRY_DELAY seconds..."
-            sleep $RETRY_DELAY
           done
           
-          echo "Health check failed after $MAX_RETRIES attempts"
-          exit 1
+      - name: Deployment summary
+        run: |
+          echo "===================================="
+          echo "Deployment Summary"
+          echo "===================================="
+          echo "Environment: ${{ env.ENV }}"
+          echo "Image: ${{ steps.build-image.outputs.image }}"
+          echo "Deployment Status: Success"
+          echo "===================================="
