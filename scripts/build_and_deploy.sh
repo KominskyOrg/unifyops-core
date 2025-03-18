@@ -184,12 +184,31 @@ if [ "$DEPLOY" = true ]; then
     --instance-ids $EC2_INSTANCE_ID \
     --document-name "AWS-RunShellScript" \
     --parameters "commands=[
+      'set -x',
       'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY',
       'docker pull $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG',
       'docker stop unifyops-api-$ENV || true',
       'docker rm unifyops-api-$ENV || true',
       'docker run -d --name unifyops-api-$ENV -p 8000:8000 $ENV_ARGS $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG',
-      'docker system prune -af'
+      'docker system prune -af',
+      'echo \"Running health check...\"',
+      'sleep 5',
+      'for i in {1..10}; do',
+      '  echo \"Health check attempt $i...\"',
+      '  STATUS_CODE=$(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/api/v1/health)',
+      '  echo \"Received status code: $STATUS_CODE\"',
+      '  if [ \"$STATUS_CODE\" = \"200\" ]; then',
+      '    echo \"Application is healthy\"',
+      '    exit 0',
+      '  else',
+      '    echo \"Application not ready yet (status: $STATUS_CODE), waiting...\"',
+      '    sleep 3',
+      '  fi',
+      'done',
+      'echo \"Health check failed after 10 attempts\"',
+      'docker ps -a',
+      'docker logs unifyops-api-$ENV || echo \"No logs available\"',
+      'exit 1'
     ]" \
     --output text --query "Command.CommandId")
   
