@@ -5,6 +5,7 @@ set -e # Exit on error
 
 # Default values
 ENV="dev"
+BUILD_IMAGE=true
 PUSH_IMAGE=true
 DEPLOY=true
 IMAGE_TAG="latest"
@@ -20,6 +21,10 @@ while [[ $# -gt 0 ]]; do
       IMAGE_TAG="$2"
       shift 2
       ;;
+    --no-build)
+      BUILD_IMAGE=false
+      shift
+      ;;
     --no-push)
       PUSH_IMAGE=false
       shift
@@ -28,13 +33,20 @@ while [[ $# -gt 0 ]]; do
       DEPLOY=false
       shift
       ;;
+    --deploy-only)
+      BUILD_IMAGE=false
+      # We still need to push if image was built elsewhere
+      shift
+      ;;
     --help)
       echo "Usage: $0 [options]"
       echo "Options:"
       echo "  --env ENV        Set deployment environment (dev, staging, prod) [default: dev]"
       echo "  --tag TAG        Set image tag [default: latest]"
+      echo "  --no-build       Skip building the Docker image"
       echo "  --no-push        Build image but don't push to ECR"
       echo "  --build-only     Build and push image but don't deploy to EC2"
+      echo "  --deploy-only    Only deploy existing image (implies --no-build)"
       echo "  --help           Show this help message"
       exit 0
       ;;
@@ -92,15 +104,17 @@ echo "==============================================="
 # Get timestamp for the build
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
 
-# Set working directory to backend folder
-cd "$(dirname "$0")/../backend" || exit 1
+# Set working directory to project root folder
+cd "$(dirname "$0")/.." || exit 1
 
-# Build Docker image
-echo "Building Docker image..."
-docker build -t $ECR_REPOSITORY:$IMAGE_TAG \
-  --build-arg ENV=$ENV \
-  --build-arg BUILD_TIMESTAMP=$TIMESTAMP \
-  .
+# Build Docker image if required
+if [ "$BUILD_IMAGE" = true ]; then
+  echo "Building Docker image..."
+  docker build -t $ECR_REPOSITORY:$IMAGE_TAG \
+    --build-arg ENV=$ENV \
+    --build-arg BUILD_TIMESTAMP=$TIMESTAMP \
+    .
+fi
 
 if [ "$PUSH_IMAGE" = true ]; then
   # Login to ECR

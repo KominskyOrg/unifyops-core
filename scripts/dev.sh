@@ -102,11 +102,21 @@ if [ "$INSTALL" = true ]; then
   pip install -e .
 fi
 
+# Function to check if a command exists
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
 # Run tests if requested
 if [ "$TEST" = true ]; then
   echo "🧪 Running tests..."
   if [ "$USE_DOCKER" = true ]; then
-    docker-compose run --rm api pytest app/tests/ -v
+    if command_exists docker-compose; then
+      docker-compose run --rm api pytest app/tests/ -v
+    else
+      echo "Warning: docker-compose not found, falling back to local testing."
+      python -m pytest app/tests/ -v
+    fi
   else
     python -m pytest app/tests/ -v
   fi

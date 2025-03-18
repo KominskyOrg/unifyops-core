@@ -20,7 +20,10 @@ dev:
 	./scripts/dev.sh
 
 test:
-	./scripts/dev.sh --test
+	./scripts/dev.sh --test --no-docker
+
+ci-test:
+	python -m pytest app/tests/ -v
 
 lint:
 	./scripts/dev.sh --lint
