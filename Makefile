@@ -1,4 +1,4 @@
-.PHONY: help install dev test lint format clean docker-build docker-up docker-down
+.PHONY: help install dev test lint format clean docker-build docker-up docker-down ci-ecr-push
 
 help:
 	@echo "Available commands:"
@@ -11,6 +11,7 @@ help:
 	@echo "  make docker-build  Build the Docker container"
 	@echo "  make docker-up     Start the Docker container"
 	@echo "  make docker-down   Stop the Docker container"
+	@echo "  make ci-ecr-push   Push the Docker container to ECR"
 
 install:
 	pip install -r requirements.txt
@@ -52,3 +53,9 @@ docker-up:
 
 docker-down:
 	docker-compose down
+
+# ECR-specific target for CI environments
+ci-ecr-push:
+	@echo "Pushing to ECR repository: $(ECR_REGISTRY)/$(ECR_REPOSITORY):$(IMAGE_TAG)"
+	docker tag unifyops-api:latest $(ECR_REGISTRY)/$(ECR_REPOSITORY):$(IMAGE_TAG)
+	docker push $(ECR_REGISTRY)/$(ECR_REPOSITORY):$(IMAGE_TAG)
