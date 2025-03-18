@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --deploy-only)
       BUILD_IMAGE=false
-      # We still need to push if image was built elsewhere
+      PUSH_IMAGE=false  # Skip push when using --deploy-only as we assume image is already in ECR
       shift
       ;;
     --help)
@@ -90,7 +90,7 @@ fi
 ECR_REGISTRY=${ECR_REGISTRY:-$(aws ecr describe-repositories --repository-names $ECR_REPOSITORY --query 'repositories[0].repositoryUri' --output text | sed "s/$ECR_REPOSITORY//")}
 
 echo "==============================================="
-echo "UnifyOps Backend Build & Deploy"
+echo "UnifyOps Core Build & Deploy"
 echo "==============================================="
 echo "Environment: $ENV"
 echo "AWS Region: $AWS_REGION"
@@ -98,6 +98,12 @@ echo "ECR Repository: $ECR_REPOSITORY"
 echo "Image Tag: $IMAGE_TAG"
 if [ "$DEPLOY" = true ]; then
   echo "EC2 Instance ID: $EC2_INSTANCE_ID"
+fi
+if [ "$BUILD_IMAGE" = false ]; then
+  echo "Build Image: SKIPPED"
+fi
+if [ "$PUSH_IMAGE" = false ]; then
+  echo "Push Image: SKIPPED"
 fi
 echo "==============================================="
 
@@ -114,6 +120,8 @@ if [ "$BUILD_IMAGE" = true ]; then
     --build-arg ENV=$ENV \
     --build-arg BUILD_TIMESTAMP=$TIMESTAMP \
     .
+else
+  echo "Skipping Docker image build (--no-build or --deploy-only flag was used)"
 fi
 
 if [ "$PUSH_IMAGE" = true ]; then
@@ -130,6 +138,8 @@ if [ "$PUSH_IMAGE" = true ]; then
   docker push $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG
   
   echo "Image successfully pushed to $ECR_REGISTRY$ECR_REPOSITORY:$IMAGE_TAG"
+else
+  echo "Skipping Docker image push to ECR (--no-push or --deploy-only flag was used)"
 fi
 
 # Deploy to EC2 if requested
