@@ -24,6 +24,8 @@ resource "aws_ecs_task_definition" "app_ec2" {
       image     = "${aws_ecr_repository.core_app_repo.repository_url}:${var.container_image_tag}"
       essential = true
 
+      memoryReservation = 1024 / 4
+
       portMappings = [
         {
           containerPort = 8000
