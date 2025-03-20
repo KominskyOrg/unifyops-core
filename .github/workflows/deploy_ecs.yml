@@ -1,0 +1,208 @@
+name: Deploy UnifyOps Core to ECS
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "app/**"
+      - "Dockerfile"
+      - "requirements.txt"
+      - ".env.*"
+      - "scripts/**"
+      - "tf/**"
+      - ".github/workflows/deploy_ecs.yml"
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+    paths:
+      - "app/**"
+      - "Dockerfile"
+      - "requirements.txt"
+      - ".env.*"
+      - "scripts/**"
+      - "tf/**"
+      - ".github/workflows/deploy_ecs.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy to"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  ECR_REPOSITORY_NAME: ${{ secrets.ECR_REPOSITORY_NAME || format('{0}-{1}-{2}-repo', github.event.inputs.environment || 'dev', 'unifyops', 'api') }}
+  TF_WORKING_DIR: ./tf
+  TERRAFORM_VERSION: 1.5.7
+
+jobs:
+  test:
+    name: Test API
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: make install
+
+      - name: Run tests
+        run: make ci-test
+
+  build-and-deploy:
+    name: Build and Deploy
+    needs: test
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+            echo "env=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "ENV=dev" >> $GITHUB_ENV
+            echo "env=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Build the Docker image
+          docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG \
+                      -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:latest \
+                      --build-arg ENV=${{ env.ENV }} \
+                      --build-arg BUILD_TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+                      .
+
+          # Push the Docker image to ECR
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:latest
+
+          # Save the image tag to use it in Terraform
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+          # Set output variables
+          echo "image=$ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # Set up Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      # Initialize Terraform
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET || format('{0}-tfstate-bucket', 'unifyops') }}" \
+            -backend-config="key=core/terraform_state.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_STATE_LOCK_TABLE || format('{0}-tfstate-lock', 'unifyops') }}"
+
+      # Create a Terraform variables file with the current image tag
+      - name: Create Terraform Variables File
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          cat > terraform.tfvars <<EOF
+          infra_env = "${{ env.ENV }}"
+          container_image_tag = "${{ env.IMAGE_TAG }}"
+          EOF
+
+      # Plan Terraform changes
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform plan -var-file=terraform.tfvars -out=tfplan
+
+      # Apply Terraform changes
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform apply -auto-approve tfplan
+
+      # Get deployment details from Terraform outputs
+      - name: Get Deployment Details
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        id: terraform-output
+        run: |
+          echo "ecs_service_name=$(terraform output -raw ecs_service_name)" >> $GITHUB_ENV
+          echo "ecs_cluster_name=$(terraform output -raw ecs_cluster_name)" >> $GITHUB_ENV
+
+      # Wait for service stability
+      - name: Wait for service stability
+        run: |
+          echo "Waiting for ECS service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster ${{ env.ecs_cluster_name }} \
+            --services ${{ env.ecs_service_name }}
+
+      # Get public endpoint - simplified for EC2 launch type only
+      - name: Get public endpoint
+        run: |
+          # For EC2 launch type only
+          INSTANCE_ID=$(aws ecs list-container-instances --cluster ${{ env.ecs_cluster_name }} --query 'containerInstanceArns[0]' --output text)
+          
+          if [[ ! -z "$INSTANCE_ID" && "$INSTANCE_ID" != "None" ]]; then
+            EC2_INSTANCE=$(aws ecs describe-container-instances --cluster ${{ env.ecs_cluster_name }} --container-instances $INSTANCE_ID --query 'containerInstances[0].ec2InstanceId' --output text)
+            
+            if [[ ! -z "$EC2_INSTANCE" && "$EC2_INSTANCE" != "None" ]]; then
+              PUBLIC_DNS=$(aws ec2 describe-instances --instance-ids $EC2_INSTANCE --query 'Reservations[0].Instances[0].PublicDnsName' --output text)
+              
+              if [[ ! -z "$PUBLIC_DNS" && "$PUBLIC_DNS" != "None" ]]; then
+                echo "Application is accessible at: http://$PUBLIC_DNS:8000"
+                echo "PUBLIC_ENDPOINT=http://$PUBLIC_DNS:8000" >> $GITHUB_ENV
+              else
+                echo "No public DNS found for the EC2 instance"
+              fi
+            else
+              echo "No EC2 instance found for the task"
+            fi
+          else
+            echo "No container instances found in the cluster"
+          fi
+
+      - name: Deployment summary
+        run: |
+          echo "===================================="
+          echo "Deployment Summary"
+          echo "===================================="
+          echo "Environment: ${{ env.ENV }}"
+          echo "Image: ${{ steps.build-image.outputs.image }}"
+          echo "Cluster: ${{ env.ecs_cluster_name }}"
+          echo "Service: ${{ env.ecs_service_name }}"
+          echo "Endpoint: ${{ env.PUBLIC_ENDPOINT || 'Not available' }}"
+          echo "Deployment Status: Success"
+          echo "======================================"

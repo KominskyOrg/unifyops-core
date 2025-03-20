@@ -128,7 +128,10 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+.env.dev
+.env.production
+.env.staging
+.env.dev
 .venv
 env/
 venv/
@@ -172,3 +175,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Cursor
+.cursor
+
+# Terraform
+.terraform*
+*.tfplan
