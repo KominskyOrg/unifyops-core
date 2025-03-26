@@ -1,4 +1,4 @@
-.PHONY: help install dev test lint format clean docker-build docker-up docker-down ci-ecr-push
+.PHONY: help install dev test lint format clean docker-build docker-up docker-down ci-ecr-push docker-logs docker-shell docker-restart docker-prune docker-test docker-lint
 
 help:
 	@echo "Available commands:"
@@ -12,6 +12,12 @@ help:
 	@echo "  make docker-up     Start the Docker container"
 	@echo "  make docker-down   Stop the Docker container"
 	@echo "  make ci-ecr-push   Push the Docker container to ECR"
+	@echo "  make docker-logs   View the Docker container logs"
+	@echo "  make docker-shell  Get a shell into the running container"
+	@echo "  make docker-restart Restart the Docker containers"
+	@echo "  make docker-prune  Remove unused Docker resources"
+	@echo "  make docker-test   Run tests inside Docker"
+	@echo "  make docker-lint   Run linting inside Docker"
 
 install:
 	pip install -r requirements.txt
@@ -65,3 +71,22 @@ ci-ecr-push:
 	docker push $(ECR_REGISTRY)/$(ECR_REPOSITORY):$(IMAGE_TAG)
 	@echo "Verifying image exists in ECR..."
 	aws ecr describe-images --repository-name $(ECR_REPOSITORY) --image-ids imageTag=$(IMAGE_TAG)
+
+docker-logs:
+	docker-compose logs -f
+
+docker-shell:
+	docker-compose exec api /bin/bash
+
+docker-restart:
+	docker-compose restart
+
+docker-prune:
+	docker system prune -f
+	docker volume prune -f
+
+docker-test:
+	docker-compose run --rm api pytest app/tests/ -v
+
+docker-lint:
+	docker-compose run --rm api black --check app/

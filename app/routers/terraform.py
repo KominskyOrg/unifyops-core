@@ -14,7 +14,7 @@ logger = get_logger("terraform.router")
 
 # Get the base directory for Terraform modules
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TF_DIR = os.path.join(BASE_DIR, "tf")
+TF_DIR = os.path.join(BASE_DIR, "app/tf")
 
 # Create Terraform service
 terraform_service = TerraformService(TF_DIR)
