@@ -6,17 +6,16 @@
 variable "container_image_tag" {
   description = "The tag of the container image to deploy"
   type        = string
-  default     = "latest" # Default to latest if not specified
+  default     = "latest"
 }
 
 # ECS Task Definition for EC2 launch type (Free Tier)
 resource "aws_ecs_task_definition" "app_ec2" {
-  family       = "${local.name}-app-ec2"
+  family       = local.name
   network_mode = "bridge"
 
   # Reference execution and task roles from the infrastructure remote state
   execution_role_arn = data.terraform_remote_state.infra.outputs.ecs_task_execution_role_arn
-  task_role_arn      = data.terraform_remote_state.infra.outputs.ecs_task_role_arn
 
   container_definitions = jsonencode([
     {
@@ -57,7 +56,7 @@ resource "aws_ecs_task_definition" "app_ec2" {
 
 # ECS Service definition for EC2 launch type
 resource "aws_ecs_service" "app_service" {
-  name            = "${local.name}-app-service"
+  name            = local.name
   cluster         = data.terraform_remote_state.infra.outputs.ecs_cluster_id
   task_definition = aws_ecs_task_definition.app_ec2.arn
   desired_count   = 1

@@ -52,10 +52,10 @@ fmt: ## Format Terraform files
 	$(TF_COMMAND) fmt -recursive
 
 plan: ## Plan Terraform changes
-	$(TF_COMMAND) plan $(TF_COMMON_ARGS)
+	$(TF_COMMAND) plan -out=plan.tfplan $(TF_COMMON_ARGS)
 
 apply: ## Apply Terraform changes
-	$(TF_COMMAND) apply $(TF_COMMON_ARGS)
+	$(TF_COMMAND) apply plan.tfplan
 
 destroy: ## Destroy Terraform-managed infrastructure
 	$(TF_COMMAND) destroy $(TF_COMMON_ARGS)
@@ -72,4 +72,4 @@ help: ## Display this help message
 	@echo
 	@echo "Targets:"
 	@awk 'BEGIN {FS = ":.*?##"} /^[a-zA-Z_-]+:.*?##/ \
-		{ printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST) 
+		{ printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
