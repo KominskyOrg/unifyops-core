@@ -2,6 +2,7 @@ from pydantic_settings import BaseSettings
 from typing import List, Optional
 import os
 from dotenv import load_dotenv
+from pydantic import field_validator
 
 # Load environment variables from .env file if it exists
 load_dotenv()
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "info")
     
     # CORS settings
-    CORS_ORIGINS: List[str] = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
+    CORS_ORIGINS_STR: str = "http://localhost:3000,http://localhost:8000"
     
     # Database settings (if added later)
     DATABASE_URL: Optional[str] = os.getenv("DATABASE_URL")
@@ -31,6 +32,14 @@ class Settings(BaseSettings):
     # Security settings
     SECRET_KEY: Optional[str] = os.getenv("SECRET_KEY")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+
+    @field_validator("CORS_ORIGINS_STR", mode="before")
+    def assemble_cors_origins(cls, v: Optional[str]) -> str:
+        return os.getenv("CORS_ORIGINS", v)
+        
+    @property
+    def CORS_ORIGINS(self) -> List[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS_STR.split(",")]
 
     class Config:
         env_file = ".env"
