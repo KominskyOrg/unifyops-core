@@ -24,7 +24,10 @@ from app.core.exceptions import (
 from app.core.middleware import init_middleware
 
 # Import routers
-from app.routers import example, terraform
+from app.routers import example, terraform, environment
+
+# Import database initialization
+from app.db.init_db import init_db
 
 # Configure structured logger
 logger = get_logger("main")
@@ -107,6 +110,7 @@ app.include_router(api_router)
 # Include other routers
 app.include_router(example.router, prefix="/api/v1")
 app.include_router(terraform.router)
+app.include_router(environment.router)
 
 
 # Root endpoint (outside of API versioning)
@@ -147,6 +151,12 @@ async def startup_event():
         version=settings.API_VERSION,
         environment=settings.ENVIRONMENT,
     )
+
+    # Initialize the database
+    try:
+        init_db()
+    except Exception as e:
+        logger.error(f"Error initializing database: {str(e)}", exception=e)
 
 
 # Shutdown event
