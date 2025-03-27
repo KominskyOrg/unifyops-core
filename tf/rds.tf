@@ -1,6 +1,6 @@
 resource "aws_db_subnet_group" "unifyops" {
   name       = "unifyops-db-subnet-group"
-  subnet_ids = data.remote_state.infra.outputs.private_subnets
+  subnet_ids = data.terraform_remote_state.infra.outputs.private_subnets
 
   tags = {
     Name = "UnifyOps DB subnet group"
@@ -11,13 +11,13 @@ resource "aws_db_subnet_group" "unifyops" {
 resource "aws_security_group" "db" {
   name        = "unifyops-db-sg"
   description = "Allow traffic from ECS to RDS"
-  vpc_id      = data.remote_state.infra.outputs.vpc_id
+  vpc_id      = data.terraform_remote_state.infra.outputs.vpc_id
 
   ingress {
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [data.remote_state.infra.outputs.ecs_security_group_id]
+    security_groups = [data.terraform_remote_state.infra.outputs.ecs_security_group_id]
   }
 
   egress {
