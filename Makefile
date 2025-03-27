@@ -98,7 +98,7 @@ format:
 # ----- Testing Commands -----
 
 test:
-	python -m pytest app/tests/ -v
+	python3 -m pytest app/tests/ -v
 
 lint:
 	black --check app/

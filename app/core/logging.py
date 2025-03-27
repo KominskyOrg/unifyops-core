@@ -32,6 +32,16 @@ class LogMessage(BaseModel):
     context: Optional[Dict[str, Any]] = None
 
 
+class CustomJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that can handle exceptions and other special types"""
+    def default(self, obj):
+        # Handle exceptions by converting them to strings
+        if isinstance(obj, Exception):
+            return str(obj)
+        # Let the base class handle other types or raise TypeError
+        return super().default(obj)
+
+
 class StructuredLogger:
     """
     Structured JSON logger for consistent, machine-parseable logs
@@ -63,8 +73,12 @@ class StructuredLogger:
         # Create structured log message
         log_data = {"level": level, "message": message, **kwargs}
 
-        # Pass to the logger
-        self.logger.log(log_level, json.dumps(log_data))
+        # Convert any exceptions to strings before JSON serialization
+        if "exception" in kwargs and isinstance(kwargs["exception"], Exception):
+            log_data["exception"] = str(kwargs["exception"])
+
+        # Pass to the logger using custom encoder
+        self.logger.log(log_level, json.dumps(log_data, cls=CustomJSONEncoder))
 
     def info(self, message: str, **kwargs) -> None:
         """Log at INFO level"""
@@ -140,8 +154,8 @@ class JSONFormatter(logging.Formatter):
             **message_dict,
         }
 
-        # Return JSON string
-        return json.dumps(log_data)
+        # Return JSON string with custom encoder
+        return json.dumps(log_data, cls=CustomJSONEncoder)
 
 
 # Create default logger instance
