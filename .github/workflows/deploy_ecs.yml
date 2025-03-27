@@ -65,8 +65,14 @@ jobs:
         run: make ci-test
 
       - name: Run linting
+        id: lint
         run: make ci-lint
         continue-on-error: true
+
+      - name: Linting Summary
+        if: steps.lint.outcome == 'failure'
+        run: |
+          echo "::warning::Linting checks failed. Code will be deployed but consider fixing these issues."
 
   build-and-deploy:
     name: Build and Deploy
