@@ -33,7 +33,7 @@ resource "aws_kms_key" "this" {
 }
 
 module "ec2_complete" {
-  source = "git::https://github.com/terraform-aws-modules/terraform-aws-ec2.git//modules/instance?ref=v5.1.0"
+  source = "git::https://github.com/terraform-aws-modules/terraform-aws-ec2.git//?ref=v5.7.1"
 
   name = var.name
 

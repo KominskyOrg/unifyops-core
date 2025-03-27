@@ -39,9 +39,10 @@ on:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
-  ECR_REPOSITORY_NAME: ${{ secrets.ECR_REPOSITORY_NAME || format('{0}-{1}-{2}-repo', github.event.inputs.environment || 'dev', 'unifyops', 'api') }}
-  TF_WORKING_DIR: ./tf
-  TERRAFORM_VERSION: 1.5.7
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME || format('{0}-{1}-{2}-repo', github.event.inputs.environment || 'dev', 'unifyops', 'api') }}
+  TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET || format('{0}-tfstate-bucket', 'unifyops') }}
+  TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE || format('{0}-tfstate-lock', 'unifyops') }}
+  TF_DIR: ./tf
 
 jobs:
   test:
@@ -62,6 +63,16 @@ jobs:
 
       - name: Run tests
         run: make ci-test
+
+      - name: Run linting
+        id: lint
+        run: make ci-lint
+        continue-on-error: true
+
+      - name: Linting Summary
+        if: steps.lint.outcome == 'failure'
+        run: |
+          echo "::warning::Linting checks failed. Code will be deployed but consider fixing these issues."
 
   build-and-deploy:
     name: Build and Deploy
@@ -95,48 +106,37 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image to Amazon ECR
-        id: build-image
+      - name: Build and tag container
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Build the Docker image
-          docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG \
-                      -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:latest \
-                      --build-arg ENV=${{ env.ENV }} \
-                      --build-arg BUILD_TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
-                      .
-
-          # Push the Docker image to ECR
-          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG
-          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:latest
-
-          # Save the image tag to use it in Terraform
+          # Set variables for Makefile
+          echo "ECR_REGISTRY=$ECR_REGISTRY" >> $GITHUB_ENV
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
-          # Set output variables
-          echo "image=$ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          # Build the container
+          make ci-build ENV=${{ env.ENV }}
+
+          # Save the image tag to use it in Terraform
+          echo "image=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Push container to ECR
+        run: make ci-ecr-push
 
       # Set up Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_version: 1.5.7
 
-      # Initialize Terraform
+      # Initialize Terraform with our tf-init target
       - name: Terraform Init
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: |
-          terraform init \
-            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET || format('{0}-tfstate-bucket', 'unifyops') }}" \
-            -backend-config="key=core/terraform_state.tfstate" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="dynamodb_table=${{ secrets.TF_STATE_LOCK_TABLE || format('{0}-tfstate-lock', 'unifyops') }}"
+        run: make tf-init
 
-      # Create a Terraform variables file with the current image tag
+      # Create a Terraform variables file with our deployment variables
       - name: Create Terraform Variables File
-        working-directory: ${{ env.TF_WORKING_DIR }}
+        working-directory: ${{ env.TF_DIR }}
         run: |
           cat > terraform.tfvars <<EOF
           infra_env = "${{ env.ENV }}"
@@ -145,21 +145,19 @@ jobs:
 
       # Plan Terraform changes
       - name: Terraform Plan
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform plan -var-file=terraform.tfvars -out=tfplan
+        run: make tf-plan
 
       # Apply Terraform changes
       - name: Terraform Apply
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform apply -auto-approve tfplan
+        run: make tf-apply
 
       # Get deployment details from Terraform outputs
       - name: Get Deployment Details
-        working-directory: ${{ env.TF_WORKING_DIR }}
         id: terraform-output
         run: |
-          echo "ecs_service_name=$(terraform output -raw ecs_service_name)" >> $GITHUB_ENV
-          echo "ecs_cluster_name=$(terraform output -raw ecs_cluster_name)" >> $GITHUB_ENV
+          make tf-output
+          echo "ecs_service_name=$(cd ${{ env.TF_DIR }} && terraform output -raw ecs_service_name)" >> $GITHUB_ENV
+          echo "ecs_cluster_name=$(cd ${{ env.TF_DIR }} && terraform output -raw ecs_cluster_name)" >> $GITHUB_ENV
 
       # Wait for service stability
       - name: Wait for service stability
@@ -169,12 +167,16 @@ jobs:
             --cluster ${{ env.ecs_cluster_name }} \
             --services ${{ env.ecs_service_name }}
 
+      # Check service status
+      - name: Check ECS Service Status
+        run: make ecs-status
+
       # Get public endpoint - simplified for EC2 launch type only
       - name: Get public endpoint
         run: |
           # For EC2 launch type only
           INSTANCE_ID=$(aws ecs list-container-instances --cluster ${{ env.ecs_cluster_name }} --query 'containerInstanceArns[0]' --output text)
-          
+
           if [[ ! -z "$INSTANCE_ID" && "$INSTANCE_ID" != "None" ]]; then
             EC2_INSTANCE=$(aws ecs describe-container-instances --cluster ${{ env.ecs_cluster_name }} --container-instances $INSTANCE_ID --query 'containerInstances[0].ec2InstanceId' --output text)
             
@@ -200,7 +202,7 @@ jobs:
           echo "Deployment Summary"
           echo "===================================="
           echo "Environment: ${{ env.ENV }}"
-          echo "Image: ${{ steps.build-image.outputs.image }}"
+          echo "Image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
           echo "Cluster: ${{ env.ecs_cluster_name }}"
           echo "Service: ${{ env.ecs_service_name }}"
           echo "Endpoint: ${{ env.PUBLIC_ENDPOINT || 'Not available' }}"

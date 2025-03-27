@@ -9,9 +9,7 @@ from app.core.config import settings
 SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL or "sqlite:///./app.db"
 
 if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(
-        SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-    )
+    engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 else:
     engine = create_engine(SQLALCHEMY_DATABASE_URL)
 
@@ -26,4 +24,4 @@ def get_db():
     try:
         yield db
     finally:
-        db.close() 
+        db.close()

@@ -3,6 +3,7 @@ FROM python:3.10-slim
 # Set build arguments
 ARG ENV=development
 ARG BUILD_TIMESTAMP
+ARG TERRAFORM_VERSION=1.11.0
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -16,7 +17,18 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    unzip \
+    gnupg \
+    git \
+    software-properties-common \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Terraform
+RUN curl -fsSL https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip -o terraform.zip \
+    && unzip terraform.zip \
+    && mv terraform /usr/local/bin/ \
+    && rm terraform.zip \
+    && terraform --version
 
 # Copy requirements first for better layer caching
 COPY requirements.txt .

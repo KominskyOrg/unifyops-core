@@ -1,1 +1,1 @@
-# Database module for future database connections and configuration 
+# Database module for future database connections and configuration

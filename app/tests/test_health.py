@@ -4,6 +4,7 @@ from app.core.config import settings
 
 client = TestClient(app)
 
+
 def test_health_check():
     """Test that the health check endpoint returns 200 and correct response."""
     response = client.get("/api/v1/health")
@@ -11,4 +12,4 @@ def test_health_check():
     data = response.json()
     assert data["status"] == "healthy"
     assert data["version"] == settings.API_VERSION
-    assert data["environment"] == settings.ENVIRONMENT 
+    assert data["environment"] == settings.ENVIRONMENT
