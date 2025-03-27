@@ -62,7 +62,7 @@ module "db" {
 
   # Use default parameter group
   create_db_parameter_group = false
-  parameter_group_name      = "default.postgres14"
+  parameter_group_name      = "default.postgres17"
 
   # Tags
   tags = {
