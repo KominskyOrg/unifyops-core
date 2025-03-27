@@ -141,6 +141,7 @@ jobs:
           cat > terraform.tfvars <<EOF
           infra_env = "${{ env.ENV }}"
           container_image_tag = "${{ env.IMAGE_TAG }}"
+          db_password = "${{ secrets.DB_PASSWORD }}"
           EOF
 
       # Plan Terraform changes

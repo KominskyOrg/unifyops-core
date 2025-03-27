@@ -34,14 +34,14 @@ resource "aws_security_group" "db" {
 
 # Create the RDS instance
 resource "aws_db_instance" "unifyops" {
-  identifier              = "unifyops"
+  identifier              = var.org
   engine                  = "postgres"
   engine_version          = "14.6"
   instance_class          = "db.t3.micro"
   allocated_storage       = 20
   max_allocated_storage   = 20
   storage_encrypted       = false
-  db_name                 = "unifyops"
+  db_name                 = var.org
   username                = "postgres"
   password                = var.db_password
   parameter_group_name    = "default.postgres14"
