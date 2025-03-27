@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.10
 
 # Set build arguments
 ARG ENV=development
@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gnupg \
     git \
     software-properties-common \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Terraform
@@ -37,6 +38,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY . .
 
+# Make scripts executable
+RUN chmod +x /app/scripts/start.sh
+
 # Create a non-root user and switch to it
 RUN addgroup --system app && adduser --system --group app
 RUN chown -R app:app /app
@@ -49,5 +53,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-# Command to run the application - fixed to properly handle the reload flag
-CMD ["sh", "-c", "if [ \"$API_RELOAD\" = \"true\" ]; then uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload; else uvicorn app.main:app --host 0.0.0.0 --port 8000; fi"]
+# Command to run the application - use the startup script
+CMD ["/app/scripts/start.sh"]

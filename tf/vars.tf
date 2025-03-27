@@ -25,3 +25,8 @@ variable "infra_env" {
   description = "The infrastructure environment"
   default     = "dev"
 }
+
+variable "db_password" {
+  type        = string
+  description = "The password for the database"
+}

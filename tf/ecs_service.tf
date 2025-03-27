@@ -40,6 +40,13 @@ resource "aws_ecs_task_definition" "app_ec2" {
         }
       ]
 
+      secrets = [
+        {
+          name      = "DB_URL"
+          valueFrom = aws_secretsmanager_secret.db_url.arn
+        }
+      ]
+
       logConfiguration = {
         logDriver = "awslogs"
         options = {
