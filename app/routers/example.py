@@ -17,16 +17,14 @@ async def get_examples(settings: Settings = Depends(get_settings)) -> Dict[str, 
         {"id": 1, "name": "Example 1", "description": "This is the first example"},
         {"id": 2, "name": "Example 2", "description": "This is the second example"},
     ]
-    
-    return {
-        "examples": examples,
-        "count": len(examples),
-        "environment": settings.ENVIRONMENT
-    }
+
+    return {"examples": examples, "count": len(examples), "environment": settings.ENVIRONMENT}
 
 
 @router.get("/{example_id}", status_code=status.HTTP_200_OK)
-async def get_example(example_id: int, settings: Settings = Depends(get_settings)) -> Dict[str, Any]:
+async def get_example(
+    example_id: int, settings: Settings = Depends(get_settings)
+) -> Dict[str, Any]:
     """
     Get a specific example by ID.
     This endpoint demonstrates path parameters.
@@ -36,13 +34,12 @@ async def get_example(example_id: int, settings: Settings = Depends(get_settings
         1: {"id": 1, "name": "Example 1", "description": "This is the first example"},
         2: {"id": 2, "name": "Example 2", "description": "This is the second example"},
     }
-    
+
     if example_id not in examples:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Example with ID {example_id} not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Example with ID {example_id} not found"
         )
-    
+
     return examples[example_id]
 
 
@@ -60,5 +57,5 @@ async def create_example(
         "name": example.get("name", "New Example"),
         "description": example.get("description", ""),
         "created": True,
-        "environment": settings.ENVIRONMENT
-    } 
+        "environment": settings.ENVIRONMENT,
+    }

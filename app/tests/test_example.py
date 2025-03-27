@@ -29,7 +29,7 @@ def test_get_example_not_found():
     """Test that the example endpoint returns 404 for non-existent examples."""
     response = client.get("/api/v1/examples/999")
     assert response.status_code == 404
-    
+
     # Check the response structure
     response_data = response.json()
     assert "message" in response_data
@@ -48,4 +48,4 @@ def test_create_example():
     assert "id" in data
     assert data["name"] == test_data["name"]
     assert data["description"] == test_data["description"]
-    assert data["created"] is True 
+    assert data["created"] is True

@@ -104,6 +104,10 @@ lint:
 	black --check app/
 	flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
 
+lint-fix:
+	black app/
+	flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+
 coverage:
 	python -m pytest --cov=app app/tests/ --cov-report=term --cov-report=html
 

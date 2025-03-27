@@ -1,1 +1,1 @@
-# Pydantic schemas for request/response validation 
+# Pydantic schemas for request/response validation

@@ -1,1 +1,1 @@
-# Database models for future ORM implementation 
+# Database models for future ORM implementation
