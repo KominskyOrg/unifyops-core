@@ -19,7 +19,7 @@ resource "aws_security_group" "db" {
   }
 
   tags = {
-    Name = "UnifyOps DB Security Group"
+    Name = "${var.org}-sg-rds"
   }
 }
 

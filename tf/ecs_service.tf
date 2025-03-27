@@ -70,6 +70,13 @@ resource "aws_ecs_service" "app_service" {
   launch_type     = "EC2"
 
   tags = local.tags
+
+  depends_on = [
+    aws_ecs_task_definition.app_ec2,
+    aws_ecr_repository.core_app_repo,
+    aws_secretsmanager_secret.db_url,
+    module.db
+  ]
 }
 
 # Output the service ARN and name for reference
