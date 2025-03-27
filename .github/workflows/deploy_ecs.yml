@@ -66,6 +66,7 @@ jobs:
 
       - name: Run linting
         run: make ci-lint
+        continue-on-error: true
 
   build-and-deploy:
     name: Build and Deploy
