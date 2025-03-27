@@ -1,13 +1,4 @@
-resource "aws_db_subnet_group" "unifyops" {
-  name       = "unifyops-db-subnet-group"
-  subnet_ids = data.terraform_remote_state.infra.outputs.private_subnets
-
-  tags = {
-    Name = "UnifyOps DB subnet group"
-  }
-}
-
-# Define a security group for the database
+# Keep the security group definition separate
 resource "aws_security_group" "db" {
   name        = "unifyops-db-sg"
   description = "Allow traffic from ECS to RDS"
@@ -32,39 +23,60 @@ resource "aws_security_group" "db" {
   }
 }
 
-# Create the RDS instance
-resource "aws_db_instance" "unifyops" {
-  identifier              = var.org
-  engine                  = "postgres"
-  engine_version          = "14.6"
-  instance_class          = "db.t3.micro"
-  allocated_storage       = 20
-  max_allocated_storage   = 20
-  storage_encrypted       = false
-  db_name                 = var.org
-  username                = "postgres"
-  password                = var.db_password
-  parameter_group_name    = "default.postgres14"
-  db_subnet_group_name    = aws_db_subnet_group.unifyops.name
-  vpc_security_group_ids  = [aws_security_group.db.id]
-  publicly_accessible     = false
-  skip_final_snapshot     = true
+# Use the RDS module instead of individual resources
+module "db" {
+  source  = "terraform-aws-modules/rds/aws"
+  version = "~> 6.0" # Use latest 6.x version
+
+  identifier = var.org
+
+  # Engine settings
+  engine               = "postgres"
+  family               = "postgres14"
+  major_engine_version = "14"
+  instance_class       = "db.t3.micro"
+
+  # Storage settings
+  allocated_storage     = 20
+  max_allocated_storage = 20
+  storage_encrypted     = false
+
+  # Database credentials
+  db_name  = var.org
+  username = "postgres"
+  password = var.db_password
+  port     = 5432
+
+  # Network settings
+  vpc_security_group_ids = [aws_security_group.db.id]
+  subnet_ids             = data.terraform_remote_state.infra.outputs.private_subnets
+  create_db_subnet_group = true
+  db_subnet_group_name   = "unifyops-db-subnet-group"
+  publicly_accessible    = false
+
+  # Maintenance settings
   backup_retention_period = 1
+  skip_final_snapshot     = true
   deletion_protection     = false
   apply_immediately       = false
 
+  # Use default parameter group
+  create_db_parameter_group = false
+  parameter_group_name      = "default.postgres14"
+
+  # Tags
   tags = {
     Name        = "UnifyOps Database"
     Environment = "Development"
   }
 }
 
-# Create a secret for the database URL
+# Keep the secrets management separate
 resource "aws_secretsmanager_secret" "db_url" {
   name = "unifyops/db-url"
 }
 
 resource "aws_secretsmanager_secret_version" "db_url" {
   secret_id     = aws_secretsmanager_secret.db_url.id
-  secret_string = "postgresql://${aws_db_instance.unifyops.username}:${var.db_password}@${aws_db_instance.unifyops.endpoint}/${aws_db_instance.unifyops.db_name}"
+  secret_string = "postgresql://${module.db.db_instance_username}:${var.db_password}@${module.db.db_instance_endpoint}/${module.db.db_instance_name}"
 }
