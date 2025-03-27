@@ -82,7 +82,7 @@ async def run_terraform_command(
     
     # Add operation-specific arguments
     if operation == TerraformOperation.INIT:
-        cmd.extend(["-input=false", "-no-color"])
+        cmd.extend(["-input=false", "-no-color", "-get=true"])
     elif operation in [TerraformOperation.APPLY, TerraformOperation.DESTROY]:
         if auto_approve:
             cmd.append("-auto-approve")
@@ -265,13 +265,14 @@ class TerraformService:
         self.logger = get_logger("terraform.service")
     
     async def init(self, module_path: str, backend_config: Optional[Dict[str, str]] = None, 
-                  correlation_id: Optional[str] = None) -> TerraformResult:
+                  force_module_download: bool = False, correlation_id: Optional[str] = None) -> TerraformResult:
         """
         Initialize a Terraform module
         
         Args:
             module_path: Path to the module relative to terraform_dir
             backend_config: Backend configuration
+            force_module_download: Whether to force download modules from source
             correlation_id: Correlation ID for request tracing
         
         Returns:
@@ -295,6 +296,25 @@ class TerraformService:
                     correlation_id=correlation_id
                 )
                 raise TerraformError(f"Failed to create backend config file: {str(e)}")
+        
+        # First try cleaning the .terraform directory if force module download is enabled
+        if force_module_download:
+            terraform_dir = os.path.join(working_dir, ".terraform")
+            if os.path.exists(terraform_dir):
+                self.logger.info(
+                    "Forcing module download: removing .terraform directory",
+                    module_path=module_path,
+                    correlation_id=correlation_id
+                )
+                try:
+                    import shutil
+                    shutil.rmtree(terraform_dir)
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to remove .terraform directory: {str(e)}",
+                        exception=e,
+                        correlation_id=correlation_id
+                    )
         
         try:
             # Run terraform init
@@ -454,4 +474,35 @@ class TerraformService:
         if not result.success:
             raise TerraformError(f"Failed to get outputs: {result.error}")
         
-        return result.outputs 
+        return result.outputs
+        
+    def get_terraform_modules(self) -> List[Dict[str, str]]:
+        """
+        Get a list of available Terraform modules
+        
+        Returns:
+            List[Dict[str, str]]: A list of modules with name, path, and description
+        """
+        modules = []
+        
+        # Scan the terraform directory for modules
+        for root, dirs, files in os.walk(self.terraform_dir):
+            # Only consider directories that have a main.tf file
+            if "main.tf" in files:
+                relative_path = os.path.relpath(root, self.terraform_dir)
+                name = os.path.basename(root)
+                
+                # Read the first line of main.tf to get the description
+                with open(os.path.join(root, "main.tf"), "r") as f:
+                    first_line = f.readline().strip()
+                    description = first_line.lstrip("# ")
+                    if description == first_line:  # No comment found
+                        description = f"Terraform module: {name}"
+                
+                modules.append({
+                    "name": name,
+                    "path": relative_path,
+                    "description": description
+                })
+        
+        return modules 

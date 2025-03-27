@@ -1,15 +1,29 @@
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, status, HTTPException
 from typing import Dict, Any, List, Optional
-from pydantic import BaseModel, Field
 import os
+from enum import Enum
 
 from app.core.config import get_settings, Settings
 from app.core.terraform import TerraformService, TerraformOperation, TerraformResult
-from app.core.exceptions import TerraformError, BadRequestError, NotFoundError
+from app.core.exceptions import TerraformError, BadRequestError, NotFoundError, ErrorResponse
 from app.core.logging import get_logger
-
+from app.schemas.terraform import (
+    ErrorResponse, TerraformModule, TerraformInitRequest, TerraformPlanRequest,
+    TerraformApplyRequest, TerraformDestroyRequest, TerraformInitResponse,
+    TerraformPlanResponse, TerraformApplyResponse, TerraformDestroyResponse,
+    ModulesResponse, OutputsResponse
+)
+    
 # Create router with tags for documentation
-router = APIRouter(prefix="/terraform", tags=["Terraform"])
+router = APIRouter(
+    prefix="/api/v1/terraform", 
+    tags=["Terraform"],
+    responses={
+        status.HTTP_400_BAD_REQUEST: {"description": "Bad Request", "model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"description": "Resource Not Found", "model": ErrorResponse},
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Terraform Operation Error", "model": ErrorResponse},
+    }
+)
 logger = get_logger("terraform.router")
 
 # Get the base directory for Terraform modules
@@ -20,100 +34,75 @@ TF_DIR = os.path.join(BASE_DIR, "app/tf")
 terraform_service = TerraformService(TF_DIR)
 
 
-class TerraformModule(BaseModel):
-    """Model for Terraform module information"""
-    name: str
-    path: str
-    description: str
-
-
-class TerraformRequest(BaseModel):
-    """Base model for Terraform operation requests"""
-    module_path: str
-    variables: Optional[Dict[str, Any]] = None
-
-
-class TerraformInitRequest(TerraformRequest):
-    """Model for Terraform init requests"""
-    backend_config: Optional[Dict[str, str]] = None
-
-
-class TerraformPlanRequest(TerraformRequest):
-    """Model for Terraform plan requests"""
-    pass
-
-
-class TerraformApplyRequest(TerraformRequest):
-    """Model for Terraform apply requests"""
-    auto_approve: bool = False
-    plan_id: Optional[str] = None
-
-
-class TerraformDestroyRequest(TerraformRequest):
-    """Model for Terraform destroy requests"""
-    auto_approve: bool = False
-
-
-class TerraformResponse(BaseModel):
-    """Base model for Terraform operation responses"""
-    operation: str
-    success: bool
-    message: str
-    execution_id: str
-    duration_ms: float
-    plan_id: Optional[str] = None
-    outputs: Optional[Dict[str, Any]] = None
-
-
-def get_terraform_modules() -> List[TerraformModule]:
-    """Get a list of available Terraform modules"""
-    modules = []
-    
-    # Scan the tf directory for modules
-    for root, dirs, files in os.walk(TF_DIR):
-        # Only consider directories that have a main.tf file
-        if "main.tf" in files:
-            relative_path = os.path.relpath(root, TF_DIR)
-            name = os.path.basename(root)
-            
-            # Read the first line of main.tf to get the description
-            with open(os.path.join(root, "main.tf"), "r") as f:
-                first_line = f.readline().strip()
-                description = first_line.lstrip("# ")
-                if description == first_line:  # No comment found
-                    description = f"Terraform module: {name}"
-            
-            modules.append(TerraformModule(
-                name=name,
-                path=relative_path,
-                description=description
-            ))
-    
-    return modules
-
-
-@router.get("/modules", status_code=status.HTTP_200_OK)
+@router.get(
+    "/modules", 
+    response_model=ModulesResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List available Terraform modules",
+    description="Returns a list of all available Terraform modules in the system."
+)
 async def list_modules(
+    request: Request,
     settings: Settings = Depends(get_settings)
 ) -> Dict[str, Any]:
     """
-    List available Terraform modules
+    List all available Terraform modules.
+    
+    Args:
+        request: The HTTP request
+        settings: Application settings
+    
+    Returns:
+        A dictionary containing the list of modules and total count.
     """
-    modules = get_terraform_modules()
+    correlation_id = getattr(request.state, "correlation_id", None)
+    
+    logger.info(
+        "Listing available Terraform modules",
+        correlation_id=correlation_id
+    )
+    
+    # Get modules from the service
+    module_dicts = terraform_service.get_terraform_modules()
+    
+    # Convert to TerraformModule instances
+    modules = [TerraformModule(**module_dict) for module_dict in module_dicts]
+    
     return {
         "modules": [module.model_dump() for module in modules],
         "count": len(modules)
     }
 
 
-@router.post("/init", status_code=status.HTTP_200_OK)
+@router.post(
+    "/init", 
+    response_model=TerraformInitResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Initialize a Terraform module",
+    description="""
+    Initializes a Terraform module by running `terraform init`.
+    This prepares the module for use by downloading providers and modules.
+    """
+)
 async def init_module(
     request: Request,
     init_request: TerraformInitRequest,
     settings: Settings = Depends(get_settings)
-) -> TerraformResponse:
+) -> TerraformInitResponse:
     """
-    Initialize a Terraform module
+    Initialize a Terraform module.
+    
+    Args:
+        request: The HTTP request
+        init_request: The initialization parameters
+        settings: Application settings
+        
+    Returns:
+        TerraformInitResponse: The result of the initialization operation
+        
+    Raises:
+        NotFoundError: If the module is not found
+        TerraformError: If the terraform init operation fails
     """
     correlation_id = getattr(request.state, "correlation_id", None)
     logger.info(
@@ -127,16 +116,53 @@ async def init_module(
         module_path = os.path.join(TF_DIR, init_request.module_path)
         if not os.path.exists(module_path):
             raise NotFoundError(f"Module not found: {init_request.module_path}")
+            
+        # List available files in module directory to help with debugging
+        files = os.listdir(module_path)
+        logger.info(
+            f"Module directory contents: {files}",
+            module_path=init_request.module_path,
+            files=files,
+            correlation_id=correlation_id
+        )
+        
+        # Check for terraform files
+        if not any(f.endswith('.tf') for f in files):
+            raise BadRequestError(f"No Terraform files found in module: {init_request.module_path}")
         
         # Run terraform init
         result = await terraform_service.init(
             module_path=init_request.module_path,
             backend_config=init_request.backend_config,
+            force_module_download=init_request.force_module_download,
             correlation_id=correlation_id
         )
         
+        # Better error handling for module-specific errors
+        if not result.success and result.error and "subdir" in result.error and "not found" in result.error:
+            logger.error(
+                f"Module dependency error: {result.error}",
+                module_path=init_request.module_path,
+                error=result.error,
+                correlation_id=correlation_id
+            )
+            
+            # Extract the missing module path from the error message
+            import re
+            missing_module = re.search(r'subdir "([^"]+)" not found', result.error)
+            if missing_module:
+                missing_path = missing_module.group(1)
+                error_msg = f"Missing module dependency: {missing_path}. Check module structure or use remote sources."
+                logger.error(
+                    error_msg,
+                    module_path=init_request.module_path,
+                    missing_module=missing_path,
+                    correlation_id=correlation_id
+                )
+                raise TerraformError(error_msg)
+        
         # Return the result
-        return TerraformResponse(
+        return TerraformInitResponse(
             operation=result.operation.value,
             success=result.success,
             message="Terraform module initialized successfully" if result.success else result.error or "Initialization failed",
@@ -157,14 +183,53 @@ async def init_module(
         raise TerraformError(str(e))
 
 
-@router.post("/plan", status_code=status.HTTP_200_OK)
+@router.post(
+    "/plan", 
+    response_model=TerraformPlanResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Create a Terraform plan",
+    description="""
+    Creates a Terraform execution plan that shows what actions Terraform 
+    would take to apply the current configuration. This is a preview step before 
+    actually making any changes to infrastructure.
+    """,
+    responses={
+        status.HTTP_200_OK: {
+            "description": "Terraform plan result",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "operation": "PLAN",
+                        "success": True,
+                        "message": "Terraform plan created successfully",
+                        "execution_id": "plan-e5f6g7h8",
+                        "duration_ms": 2367.81,
+                        "plan_id": "plan-1234567890"
+                    }
+                }
+            }
+        }
+    }
+)
 async def plan_module(
     request: Request,
     plan_request: TerraformPlanRequest,
     settings: Settings = Depends(get_settings)
-) -> TerraformResponse:
+) -> TerraformPlanResponse:
     """
-    Create a Terraform plan
+    Create a Terraform plan.
+    
+    Args:
+        request: The HTTP request
+        plan_request: The plan parameters
+        settings: Application settings
+        
+    Returns:
+        TerraformPlanResponse: The result of the plan operation
+        
+    Raises:
+        NotFoundError: If the module is not found
+        TerraformError: If the terraform plan operation fails
     """
     correlation_id = getattr(request.state, "correlation_id", None)
     logger.info(
@@ -187,7 +252,7 @@ async def plan_module(
         )
         
         # Return the result
-        return TerraformResponse(
+        return TerraformPlanResponse(
             operation=result.operation.value,
             success=result.success,
             message="Terraform plan created successfully" if result.success else result.error or "Plan creation failed",
@@ -209,14 +274,56 @@ async def plan_module(
         raise TerraformError(str(e))
 
 
-@router.post("/apply", status_code=status.HTTP_200_OK)
+@router.post(
+    "/apply", 
+    response_model=TerraformApplyResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Apply Terraform changes",
+    description="""
+    Applies the Terraform execution plan to create, update, or delete infrastructure 
+    resources as needed to reach the desired state specified in the configuration.
+    """,
+    responses={
+        status.HTTP_200_OK: {
+            "description": "Terraform apply result",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "operation": "APPLY",
+                        "success": True,
+                        "message": "Terraform apply completed successfully",
+                        "execution_id": "apply-i9j0k1l2",
+                        "duration_ms": 5892.43,
+                        "outputs": {
+                            "bucket_arn": "arn:aws:s3:::my-application-bucket",
+                            "bucket_domain_name": "my-application-bucket.s3.amazonaws.com",
+                            "bucket_regional_domain_name": "my-application-bucket.s3.us-west-2.amazonaws.com"
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def apply_module(
     request: Request,
     apply_request: TerraformApplyRequest,
     settings: Settings = Depends(get_settings)
-) -> TerraformResponse:
+) -> TerraformApplyResponse:
     """
-    Apply Terraform changes
+    Apply Terraform changes.
+    
+    Args:
+        request: The HTTP request
+        apply_request: The apply parameters
+        settings: Application settings
+        
+    Returns:
+        TerraformApplyResponse: The result of the apply operation
+        
+    Raises:
+        NotFoundError: If the module is not found
+        TerraformError: If the terraform apply operation fails
     """
     correlation_id = getattr(request.state, "correlation_id", None)
     logger.info(
@@ -257,7 +364,7 @@ async def apply_module(
                 )
         
         # Return the result
-        return TerraformResponse(
+        return TerraformApplyResponse(
             operation=result.operation.value,
             success=result.success,
             message="Terraform apply completed successfully" if result.success else result.error or "Apply failed",
@@ -279,14 +386,51 @@ async def apply_module(
         raise TerraformError(str(e))
 
 
-@router.post("/destroy", status_code=status.HTTP_200_OK)
+@router.post(
+    "/destroy", 
+    response_model=TerraformDestroyResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Destroy Terraform resources",
+    description="""
+    Destroys all the infrastructure resources managed by the Terraform module.
+    This is a destructive operation and should be used with caution.
+    """,
+    responses={
+        status.HTTP_200_OK: {
+            "description": "Terraform destroy result",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "operation": "DESTROY",
+                        "success": True,
+                        "message": "Terraform destroy completed successfully",
+                        "execution_id": "destroy-m3n4o5p6",
+                        "duration_ms": 3421.67
+                    }
+                }
+            }
+        }
+    }
+)
 async def destroy_module(
     request: Request,
     destroy_request: TerraformDestroyRequest,
     settings: Settings = Depends(get_settings)
-) -> TerraformResponse:
+) -> TerraformDestroyResponse:
     """
-    Destroy Terraform resources
+    Destroy Terraform resources.
+    
+    Args:
+        request: The HTTP request
+        destroy_request: The destroy parameters
+        settings: Application settings
+        
+    Returns:
+        TerraformDestroyResponse: The result of the destroy operation
+        
+    Raises:
+        NotFoundError: If the module is not found
+        TerraformError: If the terraform destroy operation fails
     """
     correlation_id = getattr(request.state, "correlation_id", None)
     logger.info(
@@ -310,7 +454,7 @@ async def destroy_module(
         )
         
         # Return the result
-        return TerraformResponse(
+        return TerraformDestroyResponse(
             operation=result.operation.value,
             success=result.success,
             message="Terraform destroy completed successfully" if result.success else result.error or "Destroy failed",
@@ -331,14 +475,52 @@ async def destroy_module(
         raise TerraformError(str(e))
 
 
-@router.get("/outputs/{module_path:path}", status_code=status.HTTP_200_OK)
+@router.get(
+    "/outputs/{module_path:path}", 
+    response_model=OutputsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get Terraform outputs",
+    description="""
+    Retrieves the output values from the state file for a given Terraform module.
+    This provides the current output values, which represent exported attributes of resources.
+    """,
+    responses={
+        status.HTTP_200_OK: {
+            "description": "Terraform outputs",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "module": "aws/s3_bucket",
+                        "outputs": {
+                            "bucket_arn": "arn:aws:s3:::my-application-bucket",
+                            "bucket_domain_name": "my-application-bucket.s3.amazonaws.com",
+                            "bucket_regional_domain_name": "my-application-bucket.s3.us-west-2.amazonaws.com"
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def get_outputs(
     request: Request,
     module_path: str,
     settings: Settings = Depends(get_settings)
 ) -> Dict[str, Any]:
     """
-    Get Terraform outputs for a module
+    Get Terraform outputs for a module.
+    
+    Args:
+        request: The HTTP request
+        module_path: Path to the Terraform module relative to the tf directory
+        settings: Application settings
+        
+    Returns:
+        Dict: A dictionary containing the module path and outputs
+        
+    Raises:
+        NotFoundError: If the module is not found
+        TerraformError: If the terraform output operation fails
     """
     correlation_id = getattr(request.state, "correlation_id", None)
     logger.info(

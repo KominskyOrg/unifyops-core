@@ -42,20 +42,17 @@ def test_list_modules():
         assert "description" in module
 
 
-@patch('app.routers.terraform.get_terraform_modules')
+@patch('app.routers.terraform.terraform_service.get_terraform_modules')
 def test_list_modules_with_mock(mock_get_modules):
     """Test list_modules with a mocked module list."""
-    # Create TerraformModule instances for testing
-    from app.routers.terraform import TerraformModule
-    
-    # Set up the mock modules
-    mock_modules = [
-        TerraformModule(name="vpc", path="vpc", description="VPC module"),
-        TerraformModule(name="ec2", path="ec2", description="EC2 module")
+    # Set up the mock module data
+    mock_module_data = [
+        {"name": "vpc", "path": "vpc", "description": "VPC module"},
+        {"name": "ec2", "path": "ec2", "description": "EC2 module"}
     ]
     
-    # Configure the mock to return our test modules
-    mock_get_modules.return_value = mock_modules
+    # Configure the mock to return our test module data
+    mock_get_modules.return_value = mock_module_data
 
     # Call the endpoint
     response = client.get("/api/v1/terraform/modules")
@@ -65,11 +62,8 @@ def test_list_modules_with_mock(mock_get_modules):
     # Verify the response
     assert data["count"] == 2
     
-    # Convert the expected modules to dictionaries for comparison
-    expected_modules = [module.model_dump() for module in mock_modules]
-    
     # Create sets of tuples for easy comparison regardless of order
-    expected_set = {(m["name"], m["path"], m["description"]) for m in expected_modules}
+    expected_set = {(m["name"], m["path"], m["description"]) for m in mock_module_data}
     actual_set = {(m["name"], m["path"], m["description"]) for m in data["modules"]}
     
     # Verify that the sets match
@@ -136,6 +130,44 @@ def test_init_module_with_mock_terraform_service(mock_exists, mock_terraform_ser
     assert data["success"] is True
     assert "initialized successfully" in data["message"]
     assert data["execution_id"] == "test-execution-id"
+
+
+@patch('os.path.exists')
+def test_init_module_force_download(mock_exists, mock_terraform_service):
+    """Test init module with force_module_download parameter."""
+    # Make os.path.exists return True for the module path check
+    mock_exists.return_value = True
+    
+    # Mock the init method to return a successful result
+    mock_result = TerraformResult(
+        operation=TerraformOperation.INIT,
+        success=True,
+        output="Terraform initialized successfully",
+        duration_ms=100,
+        execution_id="test-execution-id"
+    )
+    mock_terraform_service.init.return_value = mock_result
+    
+    # Request data with force_module_download=True
+    request_data = {
+        "module_path": "ec2",
+        "backend_config": {"bucket": "test-bucket"},
+        "force_module_download": True
+    }
+    
+    # Call the endpoint
+    response = client.post("/api/v1/terraform/init", json=request_data)
+    
+    # Check the response
+    assert response.status_code == 200
+    data = response.json()
+    assert data["operation"] == "init"
+    assert data["success"] is True
+    
+    # Verify that force_module_download was passed to the service
+    mock_terraform_service.init.assert_called_once()
+    args, kwargs = mock_terraform_service.init.call_args
+    assert kwargs["force_module_download"] is True
 
 
 @patch('os.path.exists')

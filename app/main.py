@@ -106,7 +106,7 @@ app.include_router(api_router)
 
 # Include other routers
 app.include_router(example.router, prefix="/api/v1")
-app.include_router(terraform.router, prefix="/api/v1")
+app.include_router(terraform.router)
 
 # Root endpoint (outside of API versioning)
 @app.get("/", tags=["Root"])
