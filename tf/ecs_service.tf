@@ -43,7 +43,7 @@ resource "aws_ecs_task_definition" "app_ec2" {
       secrets = [
         {
           name      = "DB_URL"
-          valueFrom = aws_secretsmanager_secret.db_url.arn
+          valueFrom = data.terraform_remote_state.infra.outputs.rds_endpoint
         }
       ]
 
@@ -72,10 +72,7 @@ resource "aws_ecs_service" "app_service" {
   tags = local.tags
 
   depends_on = [
-    aws_ecs_task_definition.app_ec2,
-    aws_ecr_repository.core_app_repo,
-    aws_secretsmanager_secret.db_url,
-    module.db
+    aws_ecr_repository.core_app_repo
   ]
 }
 
