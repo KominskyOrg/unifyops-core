@@ -4,6 +4,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    postgresql = {
+      source  = "cyrilgdn/postgresql"
+      version = "~> 1.21.0"
+    }
   }
 
   backend "s3" {}
@@ -23,8 +27,28 @@ provider "aws" {
 }
 
 locals {
-  name = "${var.infra_env}-${var.org}-${var.project_name}"
-  tags = {}
+  name     = "${var.infra_env}-${var.org}-${var.project_name}"
+  tags     = {}
+  db_creds = jsondecode(data.aws_secretsmanager_secret_version.db_creds.secret_string)
+}
+
+data "aws_secretsmanager_secret" "db_creds" {
+  name = "${var.infra_env}/db_creds"
+}
+
+data "aws_secretsmanager_secret_version" "db_creds" {
+  secret_id = data.aws_secretsmanager_secret.db_creds.id
+}
+
+provider "postgresql" {
+  host            = data.terraform_remote_state.infra.outputs.rds_instance_address
+  port            = data.terraform_remote_state.infra.outputs.rds_instance_port
+  database        = "postgres"
+  username        = local.db_creds.db_username
+  password        = local.db_creds.db_password
+  sslmode         = "require"
+  connect_timeout = 15
+  superuser       = false
 }
 
 # Amazon ECR repository for core service container images

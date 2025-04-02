@@ -42,8 +42,8 @@ resource "aws_ecs_task_definition" "app_ec2" {
 
       secrets = [
         {
-          name      = "DB_URL"
-          valueFrom = data.terraform_remote_state.infra.outputs.rds_endpoint
+          name      = "DATABASE_URL"
+          valueFrom = aws_secretsmanager_secret.app_db_url.arn
         }
       ]
 

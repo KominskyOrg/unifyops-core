@@ -1,4 +1,4 @@
-FROM python:3.10
+FROM python:3.12-slim
 
 # Set build arguments
 ARG ENV=development
@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     software-properties-common \
     postgresql-client \
+    dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Terraform
@@ -39,7 +40,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Make scripts executable
-RUN chmod +x /app/scripts/start.sh
+RUN dos2unix /app/scripts/start.sh && chmod +x /app/scripts/start.sh
 
 # Create a non-root user and switch to it
 RUN addgroup --system app && adduser --system --group app

@@ -17,10 +17,10 @@
 .PHONY: ecs-status ecs-logs ecs-exec ecs-deploy ecs-rollback
 
 # Environment variables with defaults
-ENV ?= development
+ENV ?= dev
 AWS_REGION ?= us-east-1
-ECR_REGISTRY ?= $(shell aws ecr describe-repositories --repository-names ${ECR_REPOSITORY} --query 'repositories[0].repositoryUri' --output text 2>/dev/null || echo "unknown")
-ECR_REPOSITORY ?= unifyops-api
+ECR_REPOSITORY ?= $(ENV)-unifyops-api-repo
+ECR_REGISTRY ?= 605134435978.dkr.ecr.us-east-1.amazonaws.com
 IMAGE_TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "latest")
 TF_DIR ?= ./tf
 
@@ -172,7 +172,7 @@ ci-ecr-push: ci-ecr-login
 	docker push $(ECR_REGISTRY)/$(ECR_REPOSITORY):$(IMAGE_TAG)
 	docker push $(ECR_REGISTRY)/$(ECR_REPOSITORY):latest
 	@echo "Verifying image exists in ECR..."
-	aws ecr describe-images --repository-name $(ECR_REPOSITORY) --image-ids imageTag=$(IMAGE_TAG)
+	aws ecr describe-images --region $(AWS_REGION) --repository-name $(ECR_REPOSITORY) --image-ids imageTag=$(IMAGE_TAG)
 
 ci-deploy: tf-init tf-plan tf-apply
 
