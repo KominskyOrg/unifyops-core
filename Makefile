@@ -20,7 +20,7 @@
 ENV ?= dev
 AWS_REGION ?= us-east-1
 ECR_REPOSITORY ?= $(ENV)-unifyops-api-repo
-ECR_REGISTRY ?= 605134435978.dkr.ecr.us-east-1.amazonaws.com
+ECR_REGISTRY ?= $(AWS_ACCOUNT).dkr.ecr.us-east-1.amazonaws.com
 IMAGE_TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "latest")
 TF_DIR ?= ./tf
 
