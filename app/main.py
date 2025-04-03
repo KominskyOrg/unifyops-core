@@ -152,19 +152,52 @@ async def startup_event():
         environment=settings.ENVIRONMENT,
     )
 
-    # Run database migrations first
-    try:
-        run_migrations()
-    except Exception as e:
-        logger.error(f"Error running database migrations: {str(e)}", exception=e)
-        # Don't raise here to allow application to start even if migrations fail
-        # This allows for debugging in case of migration issues
+    # Get database connection info for logging
+    db_url = settings.DATABASE_URL or "sqlite:///./app.db"
+    safe_db_url = db_url
+    if "@" in safe_db_url:
+        # Redact password for logging
+        parts = safe_db_url.split('@')
+        credentials = parts[0].split("://")[1].split(":")
+        if len(credentials) > 1:
+            safe_db_url = safe_db_url.replace(f":{credentials[1]}@", ":***@")
+    logger.info(f"Using database: {safe_db_url}")
 
-    # Initialize the database
-    try:
-        init_db()
-    except Exception as e:
-        logger.error(f"Error initializing database: {str(e)}", exception=e)
+    # Check for SKIP_MIGRATIONS environment variable
+    skip_migrations = os.environ.get("SKIP_MIGRATIONS", "").lower() == "true"
+    if skip_migrations:
+        logger.info("Skipping migrations due to SKIP_MIGRATIONS=true")
+    else:
+        # Check if tables already exist to avoid redundant initialization
+        try:
+            # Import here to avoid circular imports
+            from sqlalchemy import inspect
+            from app.db.database import engine, schema_name
+
+            inspector = inspect(engine)
+            existing_tables = inspector.get_table_names(schema=schema_name)
+            tables_exist = len(existing_tables) > 0
+            
+            if tables_exist:
+                logger.info(f"Found existing tables in schema '{schema_name}': {', '.join(existing_tables)}")
+            else:
+                logger.info(f"No tables found in schema '{schema_name}'. Database needs initialization.")
+            
+            # Run migrations and check result
+            migrations_success = run_migrations()
+            
+            # If migrations failed and no tables exist, fall back to direct creation
+            if not migrations_success and not tables_exist:
+                logger.info("Falling back to direct table creation")
+                try:
+                    init_db()
+                except Exception as init_error:
+                    logger.error(f"Error initializing database: {str(init_error)}")
+        except Exception as e:
+            logger.error(f"Error during database setup: {str(e)}")
+            # Continue app startup even if database setup fails
+
+    logger.info("Application startup completed")
 
 
 # Shutdown event

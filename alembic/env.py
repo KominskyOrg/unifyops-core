@@ -7,12 +7,19 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
-
 from alembic import context
+
+# Import settings from app
+from app.core.config import settings
+from app.db.database import schema_name
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Override the SQLAlchemy URL from environment variable
+if settings.DATABASE_URL:
+    config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -49,6 +56,8 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=True,
+        version_table_schema=schema_name,
     )
 
     with context.begin_transaction():
@@ -62,15 +71,34 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    # Get DB URL from config
+    url = config.get_main_option("sqlalchemy.url")
+    
+    # Override with environment variable if available
+    if settings.DATABASE_URL:
+        url = settings.DATABASE_URL
+        
+    # Configure SQLAlchemy
+    configuration = config.get_section(config.config_ini_section)
+    configuration["sqlalchemy.url"] = url
+    
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
 
     with connectable.connect() as connection:
+        # Create schema if it doesn't exist - using text() for SQLAlchemy 2.0 compatibility
+        from sqlalchemy import text
+        connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
+        connection.commit()
+        
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection, 
+            target_metadata=target_metadata,
+            include_schemas=True,
+            version_table_schema=schema_name,
         )
 
         with context.begin_transaction():

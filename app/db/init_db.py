@@ -37,26 +37,56 @@ def init_db():
 
 def run_migrations():
     """
-    Run database migrations using alembic
+    Run database migrations using alembic in a subprocess with timeout
+    to prevent hanging
     """
     try:
         logger.info("Running database migrations")
-        from alembic.config import Config
-        from alembic import command
+        import subprocess
+        import threading
+        import time
         
-        # Get the alembic.ini path
-        alembic_ini = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'alembic.ini')
+        # Use a subprocess to run alembic, which can be killed if it hangs
+        migration_process = subprocess.Popen(
+            ["alembic", "upgrade", "head"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True
+        )
         
-        # Create Alembic config
-        alembic_cfg = Config(alembic_ini)
+        # Set a timeout (15 seconds)
+        timeout = 15
+        start_time = time.time()
         
-        # Run the migration
-        command.upgrade(alembic_cfg, "head")
+        # Poll the process until it finishes or times out
+        while migration_process.poll() is None:
+            # Check if we've exceeded the timeout
+            if time.time() - start_time > timeout:
+                logger.warning(f"Migration timed out after {timeout} seconds")
+                # Force kill the process
+                migration_process.kill()
+                return False
+            # Sleep briefly to avoid busy-waiting
+            time.sleep(0.1)
+        
+        # Get return code
+        return_code = migration_process.returncode
+        
+        # Read output
+        stdout, stderr = migration_process.communicate()
+        
+        if return_code != 0:
+            logger.error(f"Migration failed with return code {return_code}")
+            if stderr:
+                logger.error(f"Migration error: {stderr}")
+            raise Exception(f"Migration failed: {stderr}")
         
         logger.info("Database migrations completed successfully")
+        return True
+            
     except Exception as e:
-        logger.error(f"Error running database migrations: {str(e)}", exception=e)
-        raise
+        logger.error(f"Error running database migrations: {str(e)}")
+        return False
 
 
 if __name__ == "__main__":

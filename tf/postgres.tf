@@ -22,13 +22,38 @@ resource "postgresql_role" "app_user" {
   ]
 }
 
-# Grant appropriate permissions to the application user
-resource "postgresql_grant" "app_user_permissions" {
+# Grant schema usage permissions to the application user
+resource "postgresql_grant" "app_user_schema_permissions" {
+  database    = data.terraform_remote_state.infra.outputs.rds_db_name
+  role        = postgresql_role.app_user.name
+  schema      = "public"
+  object_type = "schema"
+  privileges  = ["USAGE", "CREATE"]
+}
+
+# Grant table permissions to the application user
+resource "postgresql_grant" "app_user_table_permissions" {
   database    = data.terraform_remote_state.infra.outputs.rds_db_name
   role        = postgresql_role.app_user.name
   schema      = "public"
   object_type = "table"
-  privileges  = ["SELECT", "INSERT", "UPDATE", "DELETE"]
+  privileges  = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"]
+}
+
+# Grant database-level permissions
+resource "postgresql_grant" "app_user_db_permissions" {
+  database    = data.terraform_remote_state.infra.outputs.rds_db_name
+  role        = postgresql_role.app_user.name
+  object_type = "database"
+  privileges  = ["CREATE", "CONNECT", "TEMPORARY"]
+}
+
+# Allow the user to create schemas
+resource "postgresql_grant" "app_user_create_schemas" {
+  database    = data.terraform_remote_state.infra.outputs.rds_db_name
+  role        = postgresql_role.app_user.name
+  object_type = "database"
+  privileges  = ["CREATE"]
 }
 
 # Store the application's database connection string in Secrets Manager
@@ -43,6 +68,9 @@ resource "aws_secretsmanager_secret_version" "app_db_url" {
 
   depends_on = [
     postgresql_role.app_user,
-    postgresql_grant.app_user_permissions
+    postgresql_grant.app_user_schema_permissions,
+    postgresql_grant.app_user_table_permissions,
+    postgresql_grant.app_user_db_permissions,
+    postgresql_grant.app_user_create_schemas
   ]
 }

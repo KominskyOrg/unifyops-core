@@ -4,7 +4,7 @@
 
 .PHONY: help 
 # Development Commands
-.PHONY: install dev clean format
+.PHONY: install dev clean format init-db init-db-direct setup-db-permissions
 # Testing Commands
 .PHONY: test lint coverage
 # Docker Commands
@@ -31,6 +31,9 @@ help:
 	@echo "DEVELOPMENT COMMANDS:"
 	@echo "  make install       Install development dependencies"
 	@echo "  make dev           Run the API in development mode"
+	@echo "  make init-db       Initialize the database"
+	@echo "  make init-db-direct Initialize the database directly"
+	@echo "  make setup-db-permissions Set up database permissions"
 	@echo "  make clean         Remove cache and temporary files"
 	@echo "  make format        Format code with black"
 	@echo ""
@@ -85,6 +88,15 @@ install:
 
 dev:
 	./scripts/dev.sh
+
+init-db:
+	./scripts/init_db.sh
+
+init-db-direct:
+	./scripts/init_db.sh --direct
+
+setup-db-permissions:
+	./scripts/setup_db_permissions.py
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
