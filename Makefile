@@ -4,7 +4,7 @@
 
 .PHONY: help 
 # Development Commands
-.PHONY: install dev clean format init-db init-db-direct setup-db-permissions
+.PHONY: install dev clean format init-db init-db-direct setup-db-permissions db-migration db-migrate
 # Testing Commands
 .PHONY: test lint coverage
 # Docker Commands
@@ -36,6 +36,8 @@ help:
 	@echo "  make setup-db-permissions Set up database permissions"
 	@echo "  make clean         Remove cache and temporary files"
 	@echo "  make format        Format code with black"
+	@echo "  make db-migration  Create a new database migration"
+	@echo "  make db-migrate    Apply database migrations"
 	@echo ""
 	@echo "TESTING COMMANDS:"
 	@echo "  make test          Run tests locally"
@@ -106,6 +108,22 @@ clean:
 
 format:
 	black app/
+
+db-migration:
+	@echo "Creating database migration via Docker..."
+	@read -p "Enter migration name: " migration_name && \
+	read -p "Is this a fresh migration (reset alembic history)? (y/n): " reset_history && \
+	if [ "$$reset_history" = "y" ]; then \
+		echo "Resetting alembic history..." && \
+		docker-compose exec api alembic stamp base && \
+		docker-compose exec api alembic revision --autogenerate -m "$$migration_name"; \
+	else \
+		docker-compose exec api alembic revision --autogenerate -m "$$migration_name"; \
+	fi
+
+db-migrate:
+	@echo "Applying database migrations..."
+	docker-compose exec api alembic upgrade head
 
 # ----- Testing Commands -----
 

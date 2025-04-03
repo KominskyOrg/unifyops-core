@@ -22,28 +22,27 @@ class EnvironmentStatus(str, Enum):
 
 class Environment(Base):
     """
-    Model for tracking Terraform environment provisioning
+    Model for tracking high-level deployment environments (dev, staging, prod)
     """
 
     __tablename__ = "environments"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    name = Column(String(255), nullable=False, index=True)
-    module_path = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=False, index=True)  # e.g., dev, staging, prod
+    description = Column(Text, nullable=True)
     status = Column(String(50), nullable=False, default=EnvironmentStatus.PENDING.value)
-    variables = Column(JSON, nullable=True)
     error_message = Column(Text, nullable=True)
     correlation_id = Column(String(100), nullable=True)
-    auto_apply = Column(String(5), nullable=False, default="True")
+    
+    # One-to-many relationship with resources
+    resources = relationship("Resource", back_populates="environment", cascade="all, delete-orphan")
+
+    # Environment-wide variables that apply to all resources
+    global_variables = Column(JSON, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Execution tracking
-    init_execution_id = Column(String(36), nullable=True)
-    plan_execution_id = Column(String(36), nullable=True)
-    apply_execution_id = Column(String(36), nullable=True)
 
     def __repr__(self):
         return f"<Environment(id='{self.id}', name='{self.name}', status='{self.status}')>"

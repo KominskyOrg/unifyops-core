@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.core.terraform import TerraformService, TerraformOperation, TerraformResult
 from app.models.environment import Environment, EnvironmentStatus
-from app.core.exceptions import TerraformError, NotFoundError
+from app.core.exceptions import TerraformError, NotFoundError, BadRequestError
 
 logger = get_logger("environment")
 
@@ -26,6 +26,7 @@ class EnvironmentService:
         db: Session,
         name: str,
         module_path: str,
+        resource_name: str,
         variables: Optional[Dict[str, Any]] = None,
         auto_apply: bool = True,
         correlation_id: Optional[str] = None,
@@ -35,9 +36,10 @@ class EnvironmentService:
 
         Args:
             db: Database session
-            name: Environment name
+            name: Environment name (e.g., dev, staging, prod)
             module_path: Path to Terraform module
-            variables: Terraform variables
+            resource_name: Name of the resource being managed
+            variables: Optional initial Terraform variables (can be provided later)
             auto_apply: Whether to automatically apply after planning
             correlation_id: Correlation ID for request tracing
 
@@ -48,6 +50,7 @@ class EnvironmentService:
             f"Creating environment: {name}",
             name=name,
             module_path=module_path,
+            resource_name=resource_name,
             auto_apply=auto_apply,
             correlation_id=correlation_id,
         )
@@ -57,8 +60,9 @@ class EnvironmentService:
             id=str(uuid.uuid4()),
             name=name,
             module_path=module_path,
+            resource_name=resource_name,
             status=EnvironmentStatus.PENDING.value,
-            variables=variables,
+            variables=variables,  # Can be None, variables provided at runtime
             correlation_id=correlation_id,
             auto_apply=str(auto_apply),
         )
@@ -185,13 +189,20 @@ class EnvironmentService:
         self,
         db: Session,
         environment_id: str,
+        variables: Optional[Dict[str, Any]] = None,
     ) -> TerraformResult:
         """
         Run terraform init for an environment
+        
+        This initializes Terraform at the environment level, which will manage the overall
+        Terraform backend configuration and module downloads.
+        Resources within this environment will use this initialization rather than
+        having their own separate initialization.
 
         Args:
-            db: Session
+            db: Database session
             environment_id: Environment ID
+            variables: Optional variables to override stored variables
 
         Returns:
             TerraformResult: Init operation result
@@ -200,7 +211,8 @@ class EnvironmentService:
         if not environment:
             raise NotFoundError(f"Environment not found: {environment_id}")
 
-        correlation_id = environment.correlation_id
+        # Use provided correlation ID or generate a new one
+        correlation_id = environment.correlation_id or str(uuid.uuid4())
 
         # Update status to initializing
         self.update_environment_status(db, environment_id, EnvironmentStatus.INITIALIZING)
@@ -208,6 +220,11 @@ class EnvironmentService:
         try:
             # Get environment-specific backend config
             backend_config = self._get_backend_config(environment_id)
+            
+            # Get merged variables - apply user-provided variables if available
+            merged_vars = environment.variables or {}
+            if variables:
+                merged_vars.update(variables)
 
             # Run terraform init
             init_result = await self.terraform_service.init(
@@ -259,23 +276,37 @@ class EnvironmentService:
         environment_id: str,
     ) -> TerraformResult:
         """
-        Run terraform plan for an environment
+        Run Terraform plan for an environment
 
         Args:
-            db: Session
-            environment_id: Environment ID
+            db: Database session
+            environment_id: ID of the environment to plan
 
         Returns:
-            TerraformResult: Plan operation result
+            TerraformResult: The result of the plan operation
         """
+        # Get the environment
         environment = self.get_environment(db, environment_id)
         if not environment:
-            raise NotFoundError(f"Environment not found: {environment_id}")
+            raise NotFoundError(f"Environment with ID {environment_id} not found")
 
-        correlation_id = environment.correlation_id
+        # Check if environment is in a valid state for planning
+        if environment.status in [EnvironmentStatus.APPLYING.value, EnvironmentStatus.DESTROYING.value]:
+            raise BadRequestError(f"Environment is currently {environment.status}, cannot plan")
 
-        # Update status to planning
+        # Generate a correlation ID for this operation
+        correlation_id = str(uuid.uuid4())
+
+        # Update status to indicate planning is in progress
         self.update_environment_status(db, environment_id, EnvironmentStatus.PLANNING)
+
+        logger = get_logger("environment.terraform")
+        logger.info(
+            "Planning environment",
+            environment_id=environment_id,
+            module_path=environment.module_path,
+            correlation_id=correlation_id,
+        )
 
         try:
             # Make sure we have a valid init first
@@ -291,12 +322,14 @@ class EnvironmentService:
 
             # Get backend config for state management
             backend_config = self._get_backend_config(environment_id)
+            
+            # Note: backend_config is not used for plan operation, only init
+            # It was incorrectly being passed to plan() which doesn't accept it
 
             # Run terraform plan
             plan_result = await self.terraform_service.plan(
                 module_path=environment.module_path,
                 variables=environment.variables,
-                backend_config=backend_config,
                 correlation_id=correlation_id,
             )
 
