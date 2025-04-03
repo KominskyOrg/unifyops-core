@@ -115,10 +115,13 @@ jobs:
           echo "ECR_REGISTRY=$ECR_REGISTRY" >> $GITHUB_ENV
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
-          # Build the base image first
+          # Ensure Docker is set to use Linux containers with AMD64 architecture
+          docker context inspect
+
+          # Build the base image first - make sure we use a local tag
           docker build --platform=linux/amd64 -t unifyops-core-base:latest -f docker/Dockerfile.base .
 
-          # Build the environment-specific container
+          # Build the environment-specific container - use this base image
           docker build --platform=linux/amd64 -t $(ECR_REPOSITORY):$(IMAGE_TAG) \
             -f docker/Dockerfile.${{ env.ENV }} \
             --build-arg BUILD_TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \

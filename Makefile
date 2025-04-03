@@ -166,8 +166,12 @@ docker-lint:
 
 # ----- CI/CD Commands -----
 
-ci-build: docker-build-base
-	docker build -t $(ECR_REPOSITORY):$(IMAGE_TAG) \
+ci-build:
+	# Build the base image
+	docker build --platform=linux/amd64 -t unifyops-core-base:latest -f docker/Dockerfile.base .
+	
+	# Build the environment-specific image using the local base image
+	docker build --platform=linux/amd64 -t $(ECR_REPOSITORY):$(IMAGE_TAG) \
 		-f docker/Dockerfile.$(ENV) \
 		--build-arg ENV=$(ENV) \
 		--build-arg BUILD_TIMESTAMP=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ') \
