@@ -113,14 +113,31 @@ coverage:
 
 # ----- Docker Commands -----
 
-docker-build:
-	docker-compose build
+docker-build-base:
+	docker build --platform=linux/amd64 -t unifyops-core-base:latest -f docker/Dockerfile.base .
+
+docker-build-dev: docker-build-base
+	docker build --platform=linux/amd64 -t unifyops-core:dev -f docker/Dockerfile.dev \
+		--build-arg BUILD_TIMESTAMP=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ') \
+		.
+
+docker-build-staging: docker-build-base
+	docker build --platform=linux/amd64 -t unifyops-core:staging -f docker/Dockerfile.staging \
+		--build-arg BUILD_TIMESTAMP=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ') \
+		.
+
+docker-build-prod: docker-build-base
+	docker build --platform=linux/amd64 -t unifyops-core:prod -f docker/Dockerfile.prod \
+		--build-arg BUILD_TIMESTAMP=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ') \
+		.
+
+docker-build: docker-build-$(ENV)
 
 docker-up:
-	docker-compose up
+	ENV_FILE=.env.$(ENV) docker-compose up
 
 docker-up-d:
-	docker-compose up -d
+	ENV_FILE=.env.$(ENV) docker-compose up -d
 
 docker-down:
 	docker-compose down
@@ -149,8 +166,9 @@ docker-lint:
 
 # ----- CI/CD Commands -----
 
-ci-build:
+ci-build: docker-build-base
 	docker build -t $(ECR_REPOSITORY):$(IMAGE_TAG) \
+		-f docker/Dockerfile.$(ENV) \
 		--build-arg ENV=$(ENV) \
 		--build-arg BUILD_TIMESTAMP=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ') \
 		.

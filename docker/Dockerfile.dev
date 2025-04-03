@@ -1,0 +1,24 @@
+FROM unifyops-core-base:latest
+
+# Set environment variables
+ENV ENVIRONMENT=development \
+    LOG_LEVEL=debug \
+    API_RELOAD=true
+
+# Install development tools
+RUN pip install --no-cache-dir \
+    black \
+    pytest \
+    pytest-cov \
+    ipython \
+    debugpy
+
+# Copy the rest of the application - in dev, we'll mount this as a volume
+COPY . .
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+
+# Run the application in development mode with hot-reload
+CMD ["sh", "-c", "if [ \"$API_RELOAD\" = \"true\" ]; then echo 'Running in development mode with reload...' && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload; else echo 'Running in development mode...' && uvicorn app.main:app --host 0.0.0.0 --port 8000; fi"] 

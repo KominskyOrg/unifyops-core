@@ -1,5 +1,8 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+import subprocess
+import sys
+import os
 
 from app.db.database import Base
 from app.core.config import settings
@@ -30,6 +33,30 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
     logger.info("Database initialized")
+
+
+def run_migrations():
+    """
+    Run database migrations using alembic
+    """
+    try:
+        logger.info("Running database migrations")
+        from alembic.config import Config
+        from alembic import command
+        
+        # Get the alembic.ini path
+        alembic_ini = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'alembic.ini')
+        
+        # Create Alembic config
+        alembic_cfg = Config(alembic_ini)
+        
+        # Run the migration
+        command.upgrade(alembic_cfg, "head")
+        
+        logger.info("Database migrations completed successfully")
+    except Exception as e:
+        logger.error(f"Error running database migrations: {str(e)}", exception=e)
+        raise
 
 
 if __name__ == "__main__":

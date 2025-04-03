@@ -27,7 +27,7 @@ from app.core.middleware import init_middleware
 from app.routers import example, terraform, environment
 
 # Import database initialization
-from app.db.init_db import init_db
+from app.db.init_db import init_db, run_migrations
 
 # Configure structured logger
 logger = get_logger("main")
@@ -151,6 +151,14 @@ async def startup_event():
         version=settings.API_VERSION,
         environment=settings.ENVIRONMENT,
     )
+
+    # Run database migrations first
+    try:
+        run_migrations()
+    except Exception as e:
+        logger.error(f"Error running database migrations: {str(e)}", exception=e)
+        # Don't raise here to allow application to start even if migrations fail
+        # This allows for debugging in case of migration issues
 
     # Initialize the database
     try:

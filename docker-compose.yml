@@ -2,25 +2,17 @@ version: "3.8"
 
 services:
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        - ENV=development
-        - BUILD_TIMESTAMP=${BUILD_TIMESTAMP:-$(date +%Y%m%d%H%M%S)}
+    image: unifyops-core:${ENV:-dev}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./:/app
     env_file:
-      - .env.local
+      - ${ENV_FILE:-.env.local}
     environment:
-      - ENVIRONMENT=development
-      - LOG_LEVEL=debug
-      - API_RELOAD=true
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/unifyops
       - PYTHONPATH=/app
-    command: ./scripts/start.sh
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
