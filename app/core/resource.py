@@ -4,7 +4,7 @@ import os
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
-from app.core.logging import get_logger
+from app.core.logging import get_logger, get_background_task_logger
 from app.core.terraform import TerraformService, TerraformOperation, TerraformResult
 from app.models.resource import Resource, ResourceStatus
 from app.models.environment import Environment
@@ -453,6 +453,176 @@ class ResourceService:
                 db, resource_id, ResourceStatus.FAILED, error_message
             )
             raise
+
+    def start_apply_task(self, db: Session, resource_id: str, variables: Optional[Dict[str, Any]] = None):
+        """
+        Start a background task to apply Terraform changes for a resource
+
+        Args:
+            db: Database session
+            resource_id: Resource ID
+            variables: Optional variables to override stored variables
+        """
+        # Create the task
+        task = asyncio.create_task(self.provision_resource(db, resource_id, variables))
+
+        # Store the task
+        self.running_tasks[resource_id] = task
+
+        # Return the resource ID
+        return resource_id
+    
+    async def provision_resource(
+        self,
+        db: Session,
+        resource_id: str,
+        variables: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        Provision a resource by running the full Terraform workflow.
+        This method is designed to run as a background task.
+
+        Args:
+            db: Database session
+            resource_id: Resource ID
+            variables: Optional variables to override stored variables
+        """
+        # Create a dedicated logger for this background task
+        task_logger = get_background_task_logger("resource", resource_id)
+        
+        resource = self.get_resource(db, resource_id)
+        if not resource:
+            task_logger.error(f"Resource not found: {resource_id}")
+            return
+
+        # Use provided correlation ID or generate a new one
+        correlation_id = resource.correlation_id or str(uuid.uuid4())
+
+        task_logger.info(
+            f"Starting resource provisioning: {resource.name}",
+            resource_id=resource_id,
+            module_path=resource.module_path,
+            correlation_id=correlation_id,
+            resource_type=resource.resource_type,
+            environment_id=resource.environment_id,
+        )
+
+        try:
+            # Run terraform init
+            task_logger.info(
+                "Starting Terraform init phase", 
+                resource_id=resource_id,
+                correlation_id=correlation_id
+            )
+            init_result = await self.run_terraform_init(db, resource_id, variables)
+            
+            if not init_result.success:
+                task_logger.error(
+                    "Terraform init failed",
+                    resource_id=resource_id,
+                    error=init_result.error,
+                    correlation_id=correlation_id
+                )
+                return
+            
+            task_logger.info(
+                "Terraform init completed successfully",
+                resource_id=resource_id,
+                execution_id=init_result.execution_id,
+                duration_ms=init_result.duration_ms,
+                correlation_id=correlation_id
+            )
+
+            # Run terraform plan
+            task_logger.info(
+                "Starting Terraform plan phase", 
+                resource_id=resource_id,
+                correlation_id=correlation_id
+            )
+            plan_result = await self.run_terraform_plan(db, resource_id, variables)
+            
+            if not plan_result.success:
+                task_logger.error(
+                    "Terraform plan failed",
+                    resource_id=resource_id,
+                    error=plan_result.error,
+                    correlation_id=correlation_id
+                )
+                return
+            
+            task_logger.info(
+                "Terraform plan completed successfully",
+                resource_id=resource_id,
+                execution_id=plan_result.execution_id,
+                duration_ms=plan_result.duration_ms,
+                plan_id=plan_result.plan_id,
+                correlation_id=correlation_id
+            )
+
+            # Check if we should apply
+            if resource.auto_apply == "True":
+                # Run terraform apply
+                task_logger.info(
+                    "Starting Terraform apply phase", 
+                    resource_id=resource_id,
+                    correlation_id=correlation_id
+                )
+                apply_result = await self.run_terraform_apply(db, resource_id, variables)
+                
+                if not apply_result.success:
+                    task_logger.error(
+                        "Terraform apply failed",
+                        resource_id=resource_id,
+                        error=apply_result.error,
+                        correlation_id=correlation_id
+                    )
+                    return
+                
+                task_logger.info(
+                    "Terraform apply completed successfully",
+                    resource_id=resource_id,
+                    execution_id=apply_result.execution_id,
+                    duration_ms=apply_result.duration_ms,
+                    correlation_id=correlation_id
+                )
+
+                task_logger.info(
+                    f"Resource provisioned successfully: {resource.name}",
+                    resource_id=resource_id,
+                    module_path=resource.module_path,
+                    correlation_id=correlation_id,
+                )
+            else:
+                task_logger.info(
+                    f"Resource planned successfully (apply skipped): {resource.name}",
+                    resource_id=resource_id,
+                    module_path=resource.module_path,
+                    correlation_id=correlation_id,
+                )
+
+                # Update final status to "PLANNING" when auto_apply is False
+                self.update_resource_status(db, resource_id, ResourceStatus.PLANNING)
+
+        except Exception as e:
+            task_logger.error(
+                f"Error provisioning resource: {str(e)}",
+                resource_id=resource_id,
+                module_path=resource.module_path if resource else "unknown",
+                exception=e,
+                correlation_id=correlation_id,
+            )
+            self.update_resource_status(db, resource_id, ResourceStatus.FAILED, str(e))
+
+        finally:
+            # Remove from running tasks
+            if resource_id in self.running_tasks:
+                del self.running_tasks[resource_id]
+            
+            task_logger.info(
+                f"Resource provisioning task completed for: {resource_id}",
+                resource_id=resource_id,
+                correlation_id=correlation_id
+            )
 
     async def run_terraform_apply(
         self,

@@ -4,7 +4,7 @@ import os
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
-from app.core.logging import get_logger
+from app.core.logging import get_logger, get_background_task_logger
 from app.core.terraform import TerraformService, TerraformOperation, TerraformResult
 from app.models.environment import Environment, EnvironmentStatus
 from app.core.exceptions import TerraformError, NotFoundError, BadRequestError
@@ -472,15 +472,18 @@ class EnvironmentService:
             db: Database session
             environment_id: Environment ID
         """
+        # Create a dedicated logger for this background task
+        task_logger = get_background_task_logger("environment", environment_id)
+        
         # Get environment from database
         environment = self.get_environment(db, environment_id)
         if not environment:
-            logger.error(f"Environment not found: {environment_id}")
+            task_logger.error(f"Environment not found: {environment_id}")
             return
 
         correlation_id = environment.correlation_id
 
-        logger.info(
+        task_logger.info(
             f"Starting provisioning of environment: {environment.name}",
             environment_id=environment_id,
             module_path=environment.module_path,
@@ -490,30 +493,91 @@ class EnvironmentService:
 
         try:
             # Run terraform init
+            task_logger.info(
+                "Starting Terraform init phase", 
+                environment_id=environment_id,
+                correlation_id=correlation_id
+            )
             init_result = await self.run_terraform_init(db, environment_id)
+            
             if not init_result.success:
+                task_logger.error(
+                    "Terraform init failed",
+                    environment_id=environment_id,
+                    error=init_result.error,
+                    correlation_id=correlation_id
+                )
                 return
+                
+            task_logger.info(
+                "Terraform init completed successfully",
+                environment_id=environment_id,
+                execution_id=init_result.execution_id,
+                duration_ms=init_result.duration_ms,
+                correlation_id=correlation_id
+            )
 
             # Run terraform plan
+            task_logger.info(
+                "Starting Terraform plan phase", 
+                environment_id=environment_id,
+                correlation_id=correlation_id
+            )
             plan_result = await self.run_terraform_plan(db, environment_id)
+            
             if not plan_result.success:
+                task_logger.error(
+                    "Terraform plan failed",
+                    environment_id=environment_id,
+                    error=plan_result.error,
+                    correlation_id=correlation_id
+                )
                 return
+                
+            task_logger.info(
+                "Terraform plan completed successfully",
+                environment_id=environment_id,
+                execution_id=plan_result.execution_id,
+                duration_ms=plan_result.duration_ms,
+                plan_id=plan_result.plan_id,
+                correlation_id=correlation_id
+            )
 
             # Check if we should apply
             if environment.auto_apply == "True":
                 # Run terraform apply
+                task_logger.info(
+                    "Starting Terraform apply phase", 
+                    environment_id=environment_id,
+                    correlation_id=correlation_id
+                )
                 apply_result = await self.run_terraform_apply(db, environment_id)
+                
                 if not apply_result.success:
+                    task_logger.error(
+                        "Terraform apply failed",
+                        environment_id=environment_id,
+                        error=apply_result.error,
+                        correlation_id=correlation_id
+                    )
                     return
+                    
+                task_logger.info(
+                    "Terraform apply completed successfully",
+                    environment_id=environment_id,
+                    execution_id=apply_result.execution_id,
+                    duration_ms=apply_result.duration_ms,
+                    correlation_id=correlation_id
+                )
 
-                logger.info(
+                task_logger.info(
                     f"Environment provisioned successfully: {environment.name}",
                     environment_id=environment_id,
                     module_path=environment.module_path,
                     correlation_id=correlation_id,
                 )
             else:
-                logger.info(
+                task_logger.info(
                     f"Environment planned successfully (apply skipped): {environment.name}",
                     environment_id=environment_id,
                     module_path=environment.module_path,
@@ -524,7 +588,7 @@ class EnvironmentService:
                 self.update_environment_status(db, environment_id, EnvironmentStatus.PLANNING)
 
         except Exception as e:
-            logger.error(
+            task_logger.error(
                 f"Error provisioning environment: {str(e)}",
                 environment_id=environment_id,
                 module_path=environment.module_path,
@@ -537,6 +601,12 @@ class EnvironmentService:
             # Remove from running tasks
             if environment_id in self.running_tasks:
                 del self.running_tasks[environment_id]
+                
+            task_logger.info(
+                f"Environment provisioning task completed for: {environment_id}",
+                environment_id=environment_id,
+                correlation_id=correlation_id
+            )
 
     def start_provisioning_task(self, db: Session, environment_id: str):
         """

@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+import os
 import traceback
 from datetime import datetime
 from typing import Any, Dict, Optional, Union
@@ -47,7 +48,7 @@ class StructuredLogger:
     Structured JSON logger for consistent, machine-parseable logs
     """
 
-    def __init__(self, name: str, level: str = None):
+    def __init__(self, name: str, level: str = None, log_to_file: bool = False, file_path: Optional[str] = None):
         self.name = name
         self.logger = logging.getLogger(name)
 
@@ -61,10 +62,31 @@ class StructuredLogger:
         if self.logger.handlers:
             self.logger.handlers.clear()
 
-        # Add JSON handler
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(JSONFormatter())
-        self.logger.addHandler(handler)
+        # Add JSON handler for console output
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(JSONFormatter())
+        self.logger.addHandler(console_handler)
+        
+        # Add file handler if requested
+        if log_to_file:
+            self._setup_file_handler(file_path)
+
+    def _setup_file_handler(self, file_path: Optional[str] = None):
+        """Set up a file handler for logging to a file"""
+        # Create logs directory if it doesn't exist
+        logs_dir = os.path.join(os.getcwd(), "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        
+        # Use provided file path or create a default one based on the logger name
+        if not file_path:
+            file_path = os.path.join(logs_dir, f"{self.name.replace('.', '_')}.log")
+            
+        # Create a file handler that appends to the log file
+        file_handler = logging.FileHandler(file_path)
+        file_handler.setFormatter(JSONFormatter())
+        self.logger.addHandler(file_handler)
+        
+        self.info(f"File logging enabled, writing to: {file_path}")
 
     def log(self, level: str, message: str, **kwargs) -> None:
         """Base logging method"""
@@ -159,5 +181,25 @@ class JSONFormatter(logging.Formatter):
 
 
 # Create default logger instance
-get_logger = lambda name=None: StructuredLogger(name or __name__)
+get_logger = lambda name=None, log_to_file=False, file_path=None: StructuredLogger(name or __name__, log_to_file=log_to_file, file_path=file_path)
 logger = get_logger("unifyops")
+
+# Create a file logger for background tasks
+def get_background_task_logger(task_type: str, task_id: str) -> StructuredLogger:
+    """
+    Get a logger specifically for background tasks with file output enabled.
+    
+    Args:
+        task_type: Type of background task (e.g., 'terraform', 'resource', 'environment')
+        task_id: Unique identifier for the task (e.g., resource_id, environment_id)
+        
+    Returns:
+        StructuredLogger: Logger instance with file output enabled
+    """
+    logs_dir = os.path.join(os.getcwd(), "logs", "background_tasks")
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Create a file name that includes both task type and ID for easy identification
+    file_path = os.path.join(logs_dir, f"{task_type}_{task_id}.log")
+    
+    return get_logger(f"background.{task_type}.{task_id}", log_to_file=True, file_path=file_path)
