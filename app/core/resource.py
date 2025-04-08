@@ -5,49 +5,46 @@ from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger, get_background_task_logger
-from app.core.terraform import TerraformService, TerraformOperation, TerraformResult
 from app.models.resource import Resource, ResourceStatus
 from app.models.environment import Environment
-from app.core.exceptions import TerraformError, NotFoundError, BadRequestError
+from app.core.exceptions import NotFoundError, BadRequestError
 
 logger = get_logger("resource")
 
 
 class ResourceService:
     """
-    Service for managing Terraform resources within environments
+    Service for managing Terraform resource definitions within environments.
+    This service handles CRUD operations for resources and does NOT execute Terraform commands.
     """
 
-    def __init__(self, terraform_service: TerraformService):
-        self.terraform_service = terraform_service
-        self.running_tasks = {}
+    def __init__(self):
+        # No Terraform service needed here anymore
+        pass
 
     def create_resource(
         self,
         db: Session,
         environment_id: str,
         name: str,
-        module_path: str,
         resource_type: str,
         variables: Optional[Dict[str, Any]] = None,
-        auto_apply: bool = True,
         correlation_id: Optional[str] = None,
     ) -> Resource:
         """
-        Create a new resource record in the database
+        Create a new resource definition record in the database.
+        The actual infrastructure is managed at the Environment level.
 
         Args:
             db: Database session
             environment_id: ID of the parent environment
-            name: Resource name/identifier
-            module_path: Path to Terraform module
-            resource_type: Type of resource (e.g., ec2, s3)
-            variables: Initial Terraform variables (can be updated at runtime)
-            auto_apply: Whether to automatically apply after planning
+            name: Resource definition name/identifier
+            resource_type: Type of resource definition (e.g., ec2_instance, s3_bucket)
+            variables: Terraform variables specific to this resource definition
             correlation_id: Correlation ID for request tracing
 
         Returns:
-            Resource: The created resource object
+            Resource: The created resource definition object
         """
         # First, ensure the environment exists
         environment = db.query(Environment).filter(Environment.id == environment_id).first()
@@ -55,12 +52,10 @@ class ResourceService:
             raise NotFoundError(f"Environment with ID {environment_id} not found")
 
         logger.info(
-            f"Creating resource: {name}",
+            f"Creating resource definition: {name}",
             environment_id=environment_id,
             name=name,
-            module_path=module_path,
             resource_type=resource_type,
-            auto_apply=auto_apply,
             correlation_id=correlation_id,
         )
 
@@ -68,12 +63,10 @@ class ResourceService:
         resource = Resource(
             id=str(uuid.uuid4()),
             name=name,
-            module_path=module_path,
             resource_type=resource_type,
             status=ResourceStatus.PENDING.value,
             variables=variables,
             correlation_id=correlation_id,
-            auto_apply=str(auto_apply),
             environment_id=environment_id,
         )
 
@@ -85,14 +78,14 @@ class ResourceService:
 
     def get_resource(self, db: Session, resource_id: str) -> Optional[Resource]:
         """
-        Get a resource by ID
+        Get a resource definition by ID
 
         Args:
             db: Database session
             resource_id: Resource ID
 
         Returns:
-            Optional[Resource]: The resource if found, None otherwise
+            Optional[Resource]: The resource definition if found, None otherwise
         """
         return db.query(Resource).filter(Resource.id == resource_id).first()
 
@@ -105,7 +98,7 @@ class ResourceService:
         limit: int = 100
     ) -> List[Resource]:
         """
-        List resources with optional filtering
+        List resource definitions with optional filtering
 
         Args:
             db: Database session
@@ -115,7 +108,7 @@ class ResourceService:
             limit: Maximum number of records to return
 
         Returns:
-            List[Resource]: List of resources
+            List[Resource]: List of resource definitions
         """
         query = db.query(Resource)
         
@@ -135,583 +128,54 @@ class ResourceService:
         error_message: Optional[str] = None,
     ) -> Resource:
         """
-        Update the status of a resource
+        Update the status of a resource definition (e.g., PENDING, ACTIVE, INVALID)
 
         Args:
             db: Database session
             resource_id: Resource ID
-            status: New status
-            error_message: Optional error message
+            status: New status for the definition
+            error_message: Optional error message related to the definition
 
         Returns:
-            Resource: The updated resource
+            Resource: The updated resource definition
         """
         resource = self.get_resource(db, resource_id)
         if not resource:
-            raise NotFoundError(f"Resource not found: {resource_id}")
+            raise NotFoundError(f"Resource definition not found: {resource_id}")
 
         resource.status = status.value
         if error_message:
             resource.error_message = error_message
+        else:
+            # Clear error message if status is not FAILED/INVALID
+            if status != ResourceStatus.FAILED: 
+                 resource.error_message = None
 
         db.commit()
         db.refresh(resource)
 
         return resource
 
-    def update_resource_execution(
-        self, db: Session, resource_id: str, operation: TerraformOperation, execution_id: str
-    ) -> Resource:
-        """
-        Update the execution ID for a specific operation
+    # Remove update_resource_execution as it relates to Terraform runs
+    # def update_resource_execution(...)
 
-        Args:
-            db: Database session
-            resource_id: Resource ID
-            operation: Terraform operation
-            execution_id: Execution ID
-
-        Returns:
-            Resource: The updated resource
-        """
-        resource = self.get_resource(db, resource_id)
-        if not resource:
-            raise NotFoundError(f"Resource not found: {resource_id}")
-
-        if operation == TerraformOperation.INIT:
-            resource.init_execution_id = execution_id
-        elif operation == TerraformOperation.PLAN:
-            resource.plan_execution_id = execution_id
-        elif operation == TerraformOperation.APPLY:
-            resource.apply_execution_id = execution_id
-
-        db.commit()
-        db.refresh(resource)
-
-        return resource
-
-    def _get_backend_config(self, resource_id: str) -> Dict[str, str]:
-        """
-        Generate a backend configuration specific to this resource
-
-        Args:
-            resource_id: Resource ID
-
-        Returns:
-            Dict[str, str]: Backend configuration
-        """
-        # Each resource gets its own state file
-        return {"path": f"terraform.{resource_id}.tfstate"}
-
-    def _merge_variables(self, resource: Resource) -> Dict[str, Any]:
-        """
-        Merge environment global variables with resource-specific variables
-
-        Args:
-            resource: The resource object with relationship to environment
-
-        Returns:
-            Dict[str, Any]: Merged variables
-        """
-        # Start with global variables from the environment
-        merged_vars = {}
-        if resource.environment and resource.environment.global_variables:
-            merged_vars.update(resource.environment.global_variables)
-            
-        # Override with resource-specific variables
-        if resource.variables:
-            merged_vars.update(resource.variables)
-            
-        return merged_vars
-
-    async def run_terraform_init(
-        self,
-        db: Session,
-        resource_id: str,
-        variables: Optional[Dict[str, Any]] = None,
-        force_init: bool = False,
-    ) -> TerraformResult:
-        """
-        Run terraform init for a resource
-        
-        Instead of initializing at the resource level, this will now check if the environment
-        has been initialized. If not, it will trigger environment-level initialization.
-        
-        This leverages the environment's Terraform backend configuration and module downloads.
-
-        Args:
-            db: Database session
-            resource_id: Resource ID
-            variables: Optional variables to override stored variables
-            force_init: Whether to force initialization even if already initialized
-
-        Returns:
-            TerraformResult: Init operation result
-        """
-        resource = self.get_resource(db, resource_id)
-        if not resource:
-            raise NotFoundError(f"Resource not found: {resource_id}")
-
-        # Use provided correlation ID or generate a new one
-        correlation_id = resource.correlation_id or str(uuid.uuid4())
-
-        # Update status to initializing
-        self.update_resource_status(db, resource_id, ResourceStatus.INITIALIZING)
-
-        try:
-            # Check if environment is already initialized
-            environment = resource.environment
-            if not environment:
-                raise BadRequestError(f"Resource {resource_id} is not associated with an environment")
-            
-            # Import the EnvironmentService here to avoid circular imports
-            from app.core.environment import EnvironmentService
-            env_service = EnvironmentService(self.terraform_service)
-            
-            # If environment is not initialized or force init is requested, initialize it
-            if not environment.init_execution_id or force_init:
-                logger.info(
-                    "Initializing environment for resource",
-                    resource_id=resource_id,
-                    environment_id=environment.id,
-                    correlation_id=correlation_id,
-                )
-                
-                # Get merged variables
-                merged_vars = self._merge_variables(resource)
-                
-                # Override with runtime variables if provided
-                if variables:
-                    merged_vars.update(variables)
-                
-                # Run terraform init at the environment level
-                init_result = await env_service.run_terraform_init(
-                    db=db,
-                    environment_id=environment.id,
-                    variables=merged_vars,
-                )
-                
-                # If environment initialization was successful, we consider the resource initialized too
-                if init_result.success:
-                    self.update_resource_execution(
-                        db, resource_id, TerraformOperation.INIT, init_result.execution_id
-                    )
-                    self.update_resource_status(db, resource_id, ResourceStatus.PENDING)
-                else:
-                    error_message = init_result.error or "Environment initialization failed"
-                    logger.error(
-                        f"Terraform init failed: {error_message}",
-                        resource_id=resource_id,
-                        environment_id=environment.id,
-                        correlation_id=correlation_id,
-                    )
-                    self.update_resource_status(
-                        db, resource_id, ResourceStatus.FAILED, error_message
-                    )
-                
-                return init_result
-            else:
-                # Environment already initialized, just update the resource status and return success
-                logger.info(
-                    "Environment already initialized, skipping initialization",
-                    resource_id=resource_id,
-                    environment_id=environment.id,
-                    correlation_id=correlation_id,
-                )
-                
-                # Copy the environment's init execution ID to the resource
-                self.update_resource_execution(
-                    db, resource_id, TerraformOperation.INIT, environment.init_execution_id
-                )
-                self.update_resource_status(db, resource_id, ResourceStatus.PENDING)
-                
-                # Create a success result
-                return TerraformResult(
-                    operation=TerraformOperation.INIT,
-                    success=True,
-                    output="Environment already initialized, initialization skipped for resource",
-                    duration_ms=0,
-                    execution_id=environment.init_execution_id,
-                )
-
-        except Exception as e:
-            error_message = str(e)
-            logger.error(
-                f"Error during resource initialization: {error_message}",
-                resource_id=resource_id,
-                exception=e,
-                correlation_id=correlation_id,
-            )
-            self.update_resource_status(db, resource_id, ResourceStatus.FAILED, error_message)
-            raise
-
-    async def run_terraform_plan(
-        self,
-        db: Session,
-        resource_id: str,
-        variables: Optional[Dict[str, Any]] = None,
-    ) -> TerraformResult:
-        """
-        Run terraform plan for a resource
-
-        This method will check if the resource's environment has been initialized.
-        If not, it will first run initialization at the environment level.
-
-        Args:
-            db: Database session
-            resource_id: Resource ID
-            variables: Optional variables to override stored variables
-
-        Returns:
-            TerraformResult: Plan operation result
-        """
-        resource = self.get_resource(db, resource_id)
-        if not resource:
-            raise NotFoundError(f"Resource not found: {resource_id}")
-
-        # Use provided correlation ID or generate a new one
-        correlation_id = resource.correlation_id or str(uuid.uuid4())
-
-        # Update status to planning
-        self.update_resource_status(db, resource_id, ResourceStatus.PLANNING)
-
-        try:
-            # Make sure the environment has been initialized
-            environment = resource.environment
-            if not environment:
-                raise BadRequestError(f"Resource {resource_id} is not associated with an environment")
-
-            # Check if environment is initialized
-            if not environment.init_execution_id or not resource.init_execution_id:
-                logger.info(
-                    "Initializing environment before planning",
-                    resource_id=resource_id,
-                    environment_id=environment.id,
-                    correlation_id=correlation_id,
-                )
-                init_result = await self.run_terraform_init(db, resource_id, variables)
-                if not init_result.success:
-                    return init_result
-
-            # Get merged variables
-            merged_vars = self._merge_variables(resource)
-            
-            # Override with runtime variables if provided
-            if variables:
-                merged_vars.update(variables)
-
-            # Run terraform plan
-            plan_result = await self.terraform_service.plan(
-                module_path=resource.module_path,
-                variables=merged_vars,
-                correlation_id=correlation_id,
-            )
-
-            # Update execution ID
-            self.update_resource_execution(
-                db, resource_id, TerraformOperation.PLAN, plan_result.execution_id
-            )
-
-            if not plan_result.success:
-                error_message = plan_result.error or "Planning failed"
-                logger.error(
-                    f"Terraform plan failed: {error_message}",
-                    resource_id=resource_id,
-                    module_path=resource.module_path,
-                    correlation_id=correlation_id,
-                )
-                self.update_resource_status(
-                    db, resource_id, ResourceStatus.FAILED, error_message
-                )
-            else:
-                # If plan succeeded and auto-apply is enabled, automatically run apply
-                if resource.auto_apply == "True" and plan_result.has_changes:
-                    logger.info(
-                        "Auto-applying changes after successful plan",
-                        resource_id=resource_id,
-                        correlation_id=correlation_id,
-                    )
-                    # We'll use the existing task service to apply in the background
-                    # This just schedules the apply, it doesn't wait for it
-                    self.start_apply_task(db, resource_id, variables)
-                else:
-                    # Just update to pending if we're not auto-applying
-                    self.update_resource_status(db, resource_id, ResourceStatus.PENDING)
-
-            return plan_result
-
-        except Exception as e:
-            error_message = str(e)
-            logger.error(
-                f"Error during resource planning: {error_message}",
-                resource_id=resource_id,
-                module_path=resource.module_path if resource else "unknown",
-                exception=e,
-                correlation_id=correlation_id,
-            )
-            self.update_resource_status(
-                db, resource_id, ResourceStatus.FAILED, error_message
-            )
-            raise
-
-    def start_apply_task(self, db: Session, resource_id: str, variables: Optional[Dict[str, Any]] = None):
-        """
-        Start a background task to apply Terraform changes for a resource
-
-        Args:
-            db: Database session
-            resource_id: Resource ID
-            variables: Optional variables to override stored variables
-        """
-        # Create the task
-        task = asyncio.create_task(self.provision_resource(db, resource_id, variables))
-
-        # Store the task
-        self.running_tasks[resource_id] = task
-
-        # Return the resource ID
-        return resource_id
+    # Remove _get_backend_config as backend is environment-specific
+    # def _get_backend_config(...)
     
-    async def provision_resource(
-        self,
-        db: Session,
-        resource_id: str,
-        variables: Optional[Dict[str, Any]] = None,
-    ):
-        """
-        Provision a resource by running the full Terraform workflow.
-        This method is designed to run as a background task.
+    # Remove _merge_variables, this logic will move to EnvironmentService
+    # def _merge_variables(...)
 
-        Args:
-            db: Database session
-            resource_id: Resource ID
-            variables: Optional variables to override stored variables
-        """
-        # Create a dedicated logger for this background task
-        task_logger = get_background_task_logger("resource", resource_id)
-        
-        resource = self.get_resource(db, resource_id)
-        if not resource:
-            task_logger.error(f"Resource not found: {resource_id}")
-            return
+    # Remove run_terraform_init
+    # async def run_terraform_init(...)
 
-        # Use provided correlation ID or generate a new one
-        correlation_id = resource.correlation_id or str(uuid.uuid4())
+    # Remove run_terraform_plan
+    # async def run_terraform_plan(...)
 
-        task_logger.info(
-            f"Starting resource provisioning: {resource.name}",
-            resource_id=resource_id,
-            module_path=resource.module_path,
-            correlation_id=correlation_id,
-            resource_type=resource.resource_type,
-            environment_id=resource.environment_id,
-        )
+    # Remove start_apply_task
+    # def start_apply_task(...)
 
-        try:
-            # Run terraform init
-            task_logger.info(
-                "Starting Terraform init phase", 
-                resource_id=resource_id,
-                correlation_id=correlation_id
-            )
-            init_result = await self.run_terraform_init(db, resource_id, variables)
-            
-            if not init_result.success:
-                task_logger.error(
-                    "Terraform init failed",
-                    resource_id=resource_id,
-                    error=init_result.error,
-                    correlation_id=correlation_id
-                )
-                return
-            
-            task_logger.info(
-                "Terraform init completed successfully",
-                resource_id=resource_id,
-                execution_id=init_result.execution_id,
-                duration_ms=init_result.duration_ms,
-                correlation_id=correlation_id
-            )
+    # Remove provision_resource
+    # async def provision_resource(...)
 
-            # Run terraform plan
-            task_logger.info(
-                "Starting Terraform plan phase", 
-                resource_id=resource_id,
-                correlation_id=correlation_id
-            )
-            plan_result = await self.run_terraform_plan(db, resource_id, variables)
-            
-            if not plan_result.success:
-                task_logger.error(
-                    "Terraform plan failed",
-                    resource_id=resource_id,
-                    error=plan_result.error,
-                    correlation_id=correlation_id
-                )
-                return
-            
-            task_logger.info(
-                "Terraform plan completed successfully",
-                resource_id=resource_id,
-                execution_id=plan_result.execution_id,
-                duration_ms=plan_result.duration_ms,
-                plan_id=plan_result.plan_id,
-                correlation_id=correlation_id
-            )
-
-            # Check if we should apply
-            if resource.auto_apply == "True":
-                # Run terraform apply
-                task_logger.info(
-                    "Starting Terraform apply phase", 
-                    resource_id=resource_id,
-                    correlation_id=correlation_id
-                )
-                apply_result = await self.run_terraform_apply(db, resource_id, variables)
-                
-                if not apply_result.success:
-                    task_logger.error(
-                        "Terraform apply failed",
-                        resource_id=resource_id,
-                        error=apply_result.error,
-                        correlation_id=correlation_id
-                    )
-                    return
-                
-                task_logger.info(
-                    "Terraform apply completed successfully",
-                    resource_id=resource_id,
-                    execution_id=apply_result.execution_id,
-                    duration_ms=apply_result.duration_ms,
-                    correlation_id=correlation_id
-                )
-
-                task_logger.info(
-                    f"Resource provisioned successfully: {resource.name}",
-                    resource_id=resource_id,
-                    module_path=resource.module_path,
-                    correlation_id=correlation_id,
-                )
-            else:
-                task_logger.info(
-                    f"Resource planned successfully (apply skipped): {resource.name}",
-                    resource_id=resource_id,
-                    module_path=resource.module_path,
-                    correlation_id=correlation_id,
-                )
-
-                # Update final status to "PLANNING" when auto_apply is False
-                self.update_resource_status(db, resource_id, ResourceStatus.PLANNING)
-
-        except Exception as e:
-            task_logger.error(
-                f"Error provisioning resource: {str(e)}",
-                resource_id=resource_id,
-                module_path=resource.module_path if resource else "unknown",
-                exception=e,
-                correlation_id=correlation_id,
-            )
-            self.update_resource_status(db, resource_id, ResourceStatus.FAILED, str(e))
-
-        finally:
-            # Remove from running tasks
-            if resource_id in self.running_tasks:
-                del self.running_tasks[resource_id]
-            
-            task_logger.info(
-                f"Resource provisioning task completed for: {resource_id}",
-                resource_id=resource_id,
-                correlation_id=correlation_id
-            )
-
-    async def run_terraform_apply(
-        self,
-        db: Session,
-        resource_id: str,
-        variables: Optional[Dict[str, Any]] = None,
-    ) -> TerraformResult:
-        """
-        Run terraform apply for a resource
-
-        Args:
-            db: Database session
-            resource_id: Resource ID
-            variables: Optional variables to override stored variables
-
-        Returns:
-            TerraformResult: Apply operation result
-        """
-        resource = self.get_resource(db, resource_id)
-        if not resource:
-            raise NotFoundError(f"Resource not found: {resource_id}")
-
-        # Use provided correlation ID or generate a new one
-        correlation_id = resource.correlation_id or str(uuid.uuid4())
-
-        # Update status to applying
-        self.update_resource_status(db, resource_id, ResourceStatus.APPLYING)
-
-        try:
-            # Make sure we have a valid plan first
-            if not resource.plan_execution_id:
-                logger.info(
-                    "Planning resource before applying",
-                    resource_id=resource_id,
-                    correlation_id=correlation_id,
-                )
-                # Use the variables for planning if provided
-                plan_result = await self.run_terraform_plan(db, resource_id, variables)
-                if not plan_result.success:
-                    return plan_result
-
-            # Get merged variables
-            merged_vars = self._merge_variables(resource)
-            
-            # Override with runtime variables if provided
-            if variables:
-                merged_vars.update(variables)
-
-            # Run terraform apply
-            apply_result = await self.terraform_service.apply(
-                module_path=resource.module_path,
-                variables=merged_vars,
-                auto_approve=True,
-                correlation_id=correlation_id,
-            )
-
-            # Update execution ID
-            self.update_resource_execution(
-                db, resource_id, TerraformOperation.APPLY, apply_result.execution_id
-            )
-
-            # Check if apply was successful
-            if not apply_result.success:
-                error_message = apply_result.error or "Apply failed"
-                logger.error(
-                    f"Terraform apply failed: {error_message}",
-                    resource_id=resource_id,
-                    module_path=resource.module_path,
-                    correlation_id=correlation_id,
-                )
-                self.update_resource_status(
-                    db, resource_id, ResourceStatus.FAILED, error_message
-                )
-            else:
-                # Update status to provisioned
-                self.update_resource_status(db, resource_id, ResourceStatus.PROVISIONED)
-
-            return apply_result
-
-        except Exception as e:
-            error_message = str(e)
-            logger.error(
-                f"Error applying resource: {error_message}",
-                resource_id=resource_id,
-                module_path=resource.module_path,
-                exception=e,
-                correlation_id=correlation_id,
-            )
-            self.update_resource_status(
-                db, resource_id, ResourceStatus.FAILED, error_message
-            )
-            raise 
+    # Remove run_terraform_apply
+    # async def run_terraform_apply(...) 

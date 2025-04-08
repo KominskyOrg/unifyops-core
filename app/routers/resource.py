@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks, Response
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 
 from app.core.resource import ResourceService
-from app.core.exceptions import NotFoundError, BadRequestError, TerraformError, ErrorResponse
+from app.core.exceptions import NotFoundError, BadRequestError, ErrorResponse
 from app.core.logging import get_logger
 from app.db.database import get_db
 from app.dependencies import get_resource_service
@@ -12,18 +12,12 @@ from app.schemas.resource import (
     ResourceCreate,
     ResourceResponse,
     ResourceList,
-    TerraformInitRequest,
-    TerraformPlanRequest, 
-    TerraformApplyRequest,
-    TerraformInitResponse,
-    TerraformPlanResponse,
-    TerraformApplyResponse
 )
 
 # Create router with tags for documentation
 router = APIRouter(
     prefix="/api/v1/resources",
-    tags=["Resources"],
+    tags=["Resource Definitions"],
     responses={
         status.HTTP_400_BAD_REQUEST: {"description": "Bad Request", "model": ErrorResponse},
         status.HTTP_404_NOT_FOUND: {"description": "Resource Not Found", "model": ErrorResponse},
@@ -46,26 +40,20 @@ async def create_resource(
     resource_service: ResourceService = Depends(get_resource_service),
 ):
     """
-    Create a new Terraform resource
+    Create a new resource definition to be included in an environment.
+    This only creates the definition, it does not provision the infrastructure.
     """
     try:
-        # Get correlation ID from request headers if available
         correlation_id = request.headers.get("X-Correlation-ID")
-        
-        # Create the resource
         resource = resource_service.create_resource(
             db=db,
             environment_id=resource_data.environment_id,
             name=resource_data.name,
-            module_path=resource_data.module_path,
             resource_type=resource_data.resource_type,
             variables=resource_data.variables,
-            auto_apply=resource_data.auto_apply,
             correlation_id=correlation_id,
         )
-        
         return ResourceResponse.model_validate(resource)
-    
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
@@ -83,7 +71,7 @@ async def list_resources(
     resource_service: ResourceService = Depends(get_resource_service),
 ):
     """
-    List all resources, optionally filtered by environment ID or resource type
+    List all resource definitions, optionally filtered by environment ID or resource type.
     """
     try:
         resources = resource_service.list_resources(
@@ -93,9 +81,7 @@ async def list_resources(
             skip=skip,
             limit=limit
         )
-        
-        return ResourceList(resources=resources, total=len(resources))
-    
+        return ResourceList(resources=[ResourceResponse.model_validate(r) for r in resources], total=len(resources))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -108,222 +94,86 @@ async def get_resource(
     resource_service: ResourceService = Depends(get_resource_service),
 ):
     """
-    Get details of a specific resource
+    Get details of a specific resource definition.
     """
     try:
         resource = resource_service.get_resource(db=db, resource_id=resource_id)
-        
         if not resource:
-            raise NotFoundError(f"Resource with ID {resource_id} not found")
-        
+            raise NotFoundError(f"Resource definition with ID {resource_id} not found")
         return ResourceResponse.model_validate(resource)
-    
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post("/{resource_id}/init", response_model=TerraformInitResponse)
-async def init_resource(
+@router.put("/{resource_id}", response_model=ResourceResponse)
+async def update_resource(
     request: Request,
     resource_id: str,
-    init_request: TerraformInitRequest,
+    resource_update: ResourceCreate,
     db: Session = Depends(get_db),
     resource_service: ResourceService = Depends(get_resource_service),
 ):
     """
-    Initialize a Terraform resource
+    Update an existing resource definition.
+    Note: This modifies the definition. To apply changes, re-provision the environment.
     """
-    try:
-        # Get correlation ID from request headers if available
-        correlation_id = request.headers.get("X-Correlation-ID")
-        
-        # Run init
-        init_result = await resource_service.run_terraform_init(
-            db=db, 
-            resource_id=resource_id,
-            variables=init_request.variables
-        )
-        
-        return TerraformInitResponse(
-            resource_id=resource_id,
-            success=init_result.success,
-            execution_id=init_result.execution_id,
-            output=init_result.output,
-            error=init_result.error,
-            duration_ms=init_result.duration_ms
-        )
-    
-    except NotFoundError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except BadRequestError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except TerraformError as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@router.post("/{resource_id}/plan", response_model=TerraformPlanResponse)
-async def plan_resource(
-    request: Request,
-    resource_id: str,
-    plan_request: TerraformPlanRequest,
-    db: Session = Depends(get_db),
-    resource_service: ResourceService = Depends(get_resource_service),
-):
-    """
-    Plan a Terraform resource
-    """
-    try:
-        # Get correlation ID from request headers if available
-        correlation_id = request.headers.get("X-Correlation-ID")
-        
-        # Run plan
-        plan_result = await resource_service.run_terraform_plan(
-            db=db, 
-            resource_id=resource_id,
-            variables=plan_request.variables
-        )
-        
-        return TerraformPlanResponse(
-            resource_id=resource_id,
-            success=plan_result.success,
-            execution_id=plan_result.execution_id,
-            plan_id=plan_result.plan_id,
-            output=plan_result.output,
-            error=plan_result.error,
-            duration_ms=plan_result.duration_ms
-        )
-    
-    except NotFoundError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except BadRequestError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except TerraformError as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@router.post("/{resource_id}/apply", response_model=TerraformApplyResponse)
-async def apply_resource(
-    request: Request,
-    resource_id: str,
-    apply_request: TerraformApplyRequest,
-    db: Session = Depends(get_db),
-    resource_service: ResourceService = Depends(get_resource_service),
-):
-    """
-    Apply a Terraform resource
-    """
-    try:
-        # Get correlation ID from request headers if available
-        correlation_id = request.headers.get("X-Correlation-ID")
-        
-        # Run apply
-        apply_result = await resource_service.run_terraform_apply(
-            db=db, 
-            resource_id=resource_id,
-            variables=apply_request.variables
-        )
-        
-        return TerraformApplyResponse(
-            resource_id=resource_id,
-            success=apply_result.success,
-            execution_id=apply_result.execution_id,
-            output=apply_result.output,
-            error=apply_result.error,
-            duration_ms=apply_result.duration_ms
-        )
-    
-    except NotFoundError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except BadRequestError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except TerraformError as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@router.post(
-    "/{resource_id}/provision",
-    response_model=ResourceResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Provision a resource",
-    description="""
-    Triggers the provisioning process for a resource.
-    This is an asynchronous operation that runs in the background.
-    It will execute the full Terraform workflow (init, plan, and optionally apply).
-    If the resource has auto_apply set to false, it will stop after the plan stage.
-    """,
-)
-async def provision_resource(
-    request: Request,
-    resource_id: str,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-    resource_service: ResourceService = Depends(get_resource_service),
-) -> ResourceResponse:
-    """
-    Start provisioning a resource
-    
-    Args:
-        request: The HTTP request
-        resource_id: Resource ID
-        background_tasks: FastAPI background tasks
-        db: Database session
-        resource_service: Resource service
-        
-    Returns:
-        ResourceResponse: The resource with updated status
-    """
-    correlation_id = getattr(request.state, "correlation_id", None)
-    
-    logger.info(
-        f"Starting resource provisioning: {resource_id}",
-        resource_id=resource_id,
-        correlation_id=correlation_id,
-    )
+    correlation_id = request.headers.get("X-Correlation-ID")
+    logger.info(f"Updating resource definition {resource_id}", resource_id=resource_id, correlation_id=correlation_id)
     
     resource = resource_service.get_resource(db, resource_id)
     if not resource:
-        raise NotFoundError(f"Resource not found: {resource_id}")
-    
-    # Check if resource is already being provisioned
-    if resource.status in [
-        ResourceStatus.INITIALIZING.value,
-        ResourceStatus.PLANNING.value,
-        ResourceStatus.APPLYING.value
-    ]:
-        return ResourceResponse.model_validate(resource)
+        raise NotFoundError(f"Resource definition with ID {resource_id} not found")
+
+    resource.name = resource_update.name
+    resource.resource_type = resource_update.resource_type
+    resource.variables = resource_update.variables
+    if resource.environment_id != resource_update.environment_id:
+        new_env = db.query(Environment).filter(Environment.id == resource_update.environment_id).first()
+        if not new_env:
+            raise BadRequestError(f"Cannot move resource definition: New environment {resource_update.environment_id} not found")
+        resource.environment_id = resource_update.environment_id
+        logger.info(f"Moved resource definition {resource_id} to environment {resource.environment_id}", resource_id=resource_id)
+        
+    resource.status = ResourceStatus.PENDING.value
+    resource.error_message = None
     
     try:
-        # Run init and plan in background
-        background_tasks.add_task(
-            resource_service.start_apply_task,
-            db=db,
-            resource_id=resource_id,
-            variables=None,  # Use stored variables
-        )
-        
-        # Update status to pending
-        resource_service.update_resource_status(
-            db, resource_id, ResourceStatus.PENDING
-        )
-        
-        # Refresh resource
-        resource = resource_service.get_resource(db, resource_id)
-        
+        db.commit()
+        db.refresh(resource)
+        logger.info(f"Successfully updated resource definition {resource_id}", resource_id=resource_id)
         return ResourceResponse.model_validate(resource)
-        
     except Exception as e:
-        logger.error(
-            f"Error starting resource provisioning: {str(e)}",
-            resource_id=resource_id,
-            exception=e,
-            correlation_id=correlation_id,
-        )
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) 
+        db.rollback()
+        logger.error(f"Error updating resource definition {resource_id}: {e}", resource_id=resource_id, exception=e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update resource definition: {str(e)}")
+
+
+@router.delete("/{resource_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_resource(
+    request: Request,
+    resource_id: str,
+    db: Session = Depends(get_db),
+    resource_service: ResourceService = Depends(get_resource_service),
+):
+    """
+    Delete a resource definition.
+    Note: This removes the definition. To remove the infrastructure, re-provision the environment.
+    """
+    correlation_id = request.headers.get("X-Correlation-ID")
+    logger.info(f"Deleting resource definition {resource_id}", resource_id=resource_id, correlation_id=correlation_id)
+    
+    resource = resource_service.get_resource(db, resource_id)
+    if not resource:
+        raise NotFoundError(f"Resource definition with ID {resource_id} not found")
+        
+    try:
+        db.delete(resource)
+        db.commit()
+        logger.info(f"Successfully deleted resource definition {resource_id}", resource_id=resource_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting resource definition {resource_id}: {e}", resource_id=resource_id, exception=e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete resource definition: {str(e)}") 
