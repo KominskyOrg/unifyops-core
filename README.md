@@ -1,6 +1,6 @@
 # UnifyOps Core
 
-UnifyOps Core is a platform for operations management and automation.
+UnifyOps Core is a platform for operations management and infrastructure automation.
 
 ## Components
 
@@ -8,36 +8,77 @@ UnifyOps Core is a platform for operations management and automation.
 
 The backend API is built using FastAPI, a modern Python framework for building APIs. It provides a RESTful interface for the UnifyOps platform.
 
-- [Backend API Documentation](backend/README.md)
-- [Docker Deployment Guide](docs/docker-deployment-setup.md)
-
 ## Local Development
 
-Each component has its own local development environment:
+### Prerequisites
 
-- [Backend API Local Development](backend/README.md#local-development-setup)
+- Python 3.8+
+- PostgreSQL (or use the SQLite default for development)
+- Docker and Docker Compose (for containerized deployment)
+
+### Setup
+
+1. Clone the repository
+2. Create a virtual environment and install dependencies:
+
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+3. Set up environment variables (using .env.local for local development)
+4. Run database migrations:
+
+```bash
+alembic upgrade head
+```
+
+5. Start the development server:
+
+```bash
+uvicorn app.main:app --reload
+```
 
 ## Deployment
 
-The project includes GitHub Actions workflows for automated deployment:
+The project supports multiple deployment methods:
 
-- [Backend Deployment to EC2](docs/docker-deployment-setup.md)
+- Docker container deployment
+- AWS ECS deployment (using Terraform infrastructure in /tf directory)
 
 ## Project Structure
 
 ```
 unifyops-core/
-├── backend/             # FastAPI backend application
-├── docs/                # Documentation files
-├── scripts/             # Utility scripts
-├── .github/             # GitHub Actions workflows
-└── README.md            # This file
+├── app/                # FastAPI backend application
+│   ├── core/           # Core functionality (config, logging, exceptions)
+│   ├── db/             # Database models and initialization
+│   ├── models/         # SQLAlchemy ORM models
+│   ├── routers/        # API route definitions
+│   ├── schemas/        # Pydantic models for request/response validation
+│   └── main.py         # Application entry point
+├── alembic/            # Database migration scripts
+├── logs/               # Application logs
+│   └── background_tasks/ # Background task execution logs
+├── scripts/            # Utility scripts
+├── tf/                 # Terraform infrastructure as code
+├── docker/             # Docker configuration files
+├── .github/            # GitHub Actions workflows
+└── Makefile            # Build and deployment automation
 ```
 
-## Getting Started
+## Makefile Commands
 
-1. Clone the repository
-2. Follow the setup instructions in the specific component's README
+The project includes a Makefile to simplify common tasks. Use `make help` to see available commands.
+
+## Background Task Logging
+
+The system includes a log viewer script to help you read and monitor task logs:
+
+```bash
+./read_task_logs.py --list
+```
 
 ## Contributing
 

@@ -11,7 +11,7 @@ variable "org" {
 variable "project_name" {
   type        = string
   description = "The project name"
-  default     = "core"
+  default     = "api"
 }
 
 variable "region" {

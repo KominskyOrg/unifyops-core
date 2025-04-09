@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "info")
 
+    # Logging settings
+    LOG_TO_FILE: bool = os.getenv("LOG_TO_FILE", "false").lower() == "true"
+    LOG_DIR: str = os.getenv("LOG_DIR", "logs")
+    TASK_LOG_DIR: str = os.getenv("TASK_LOG_DIR", "logs/background_tasks")
+    LOG_MAX_SIZE_MB: int = int(os.getenv("LOG_MAX_SIZE_MB", "10"))
+    LOG_BACKUP_COUNT: int = int(os.getenv("LOG_BACKUP_COUNT", "5"))
+    TERRAFORM_LOG_LEVEL: str = os.getenv("TERRAFORM_LOG_LEVEL", "info")
+
     # CORS settings
     CORS_ORIGINS_STR: str = "http://localhost:3000,http://localhost:8000"
 

@@ -4,7 +4,7 @@
 
 .PHONY: help 
 # Development Commands
-.PHONY: install dev clean format
+.PHONY: install dev clean format init-db init-db-direct setup-db-permissions db-migration db-migrate
 # Testing Commands
 .PHONY: test lint coverage
 # Docker Commands
@@ -17,10 +17,10 @@
 .PHONY: ecs-status ecs-logs ecs-exec ecs-deploy ecs-rollback
 
 # Environment variables with defaults
-ENV ?= development
+ENV ?= dev
 AWS_REGION ?= us-east-1
-ECR_REGISTRY ?= $(shell aws ecr describe-repositories --repository-names ${ECR_REPOSITORY} --query 'repositories[0].repositoryUri' --output text 2>/dev/null || echo "unknown")
-ECR_REPOSITORY ?= unifyops-api
+ECR_REPOSITORY ?= $(ENV)-unifyops-api-repo
+ECR_REGISTRY ?= $(AWS_ACCOUNT).dkr.ecr.us-east-1.amazonaws.com
 IMAGE_TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "latest")
 TF_DIR ?= ./tf
 
@@ -31,8 +31,13 @@ help:
 	@echo "DEVELOPMENT COMMANDS:"
 	@echo "  make install       Install development dependencies"
 	@echo "  make dev           Run the API in development mode"
+	@echo "  make init-db       Initialize the database"
+	@echo "  make init-db-direct Initialize the database directly"
+	@echo "  make setup-db-permissions Set up database permissions"
 	@echo "  make clean         Remove cache and temporary files"
 	@echo "  make format        Format code with black"
+	@echo "  make db-migration  Create a new database migration"
+	@echo "  make db-migrate    Apply database migrations"
 	@echo ""
 	@echo "TESTING COMMANDS:"
 	@echo "  make test          Run tests locally"
@@ -86,6 +91,15 @@ install:
 dev:
 	./scripts/dev.sh
 
+init-db:
+	./scripts/init_db.sh
+
+init-db-direct:
+	./scripts/init_db.sh --direct
+
+setup-db-permissions:
+	./scripts/setup_db_permissions.py
+
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name ".pytest_cache" -exec rm -rf {} +
@@ -95,10 +109,26 @@ clean:
 format:
 	black app/
 
+db-migration:
+	@echo "Creating database migration via Docker..."
+	@read -p "Enter migration name: " migration_name && \
+	read -p "Is this a fresh migration (reset alembic history)? (y/n): " reset_history && \
+	if [ "$$reset_history" = "y" ]; then \
+		echo "Resetting alembic history..." && \
+		docker-compose exec api alembic stamp base && \
+		docker-compose exec api alembic revision --autogenerate -m "$$migration_name"; \
+	else \
+		docker-compose exec api alembic revision --autogenerate -m "$$migration_name"; \
+	fi
+
+db-migrate:
+	@echo "Applying database migrations..."
+	docker-compose exec api alembic upgrade head
+
 # ----- Testing Commands -----
 
 test:
-	python -m pytest app/tests/ -v
+	python3 -m pytest app/tests/ -v
 
 lint:
 	black --check app/
@@ -113,14 +143,31 @@ coverage:
 
 # ----- Docker Commands -----
 
-docker-build:
-	docker-compose build
+docker-build-base:
+	docker build --platform=linux/amd64 -t unifyops-core-base:latest -f docker/Dockerfile.base .
+
+docker-build-dev: docker-build-base
+	docker build --platform=linux/amd64 -t unifyops-core:dev -f docker/Dockerfile.dev \
+		--build-arg BUILD_TIMESTAMP=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ') \
+		.
+
+docker-build-staging: docker-build-base
+	docker build --platform=linux/amd64 -t unifyops-core:staging -f docker/Dockerfile.staging \
+		--build-arg BUILD_TIMESTAMP=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ') \
+		.
+
+docker-build-prod: docker-build-base
+	docker build --platform=linux/amd64 -t unifyops-core:prod -f docker/Dockerfile.prod \
+		--build-arg BUILD_TIMESTAMP=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ') \
+		.
+
+docker-build: docker-build-$(ENV)
 
 docker-up:
-	docker-compose up
+	ENV_FILE=.env.$(ENV) docker-compose up
 
 docker-up-d:
-	docker-compose up -d
+	ENV_FILE=.env.$(ENV) docker-compose up -d
 
 docker-down:
 	docker-compose down
@@ -150,7 +197,12 @@ docker-lint:
 # ----- CI/CD Commands -----
 
 ci-build:
-	docker build -t $(ECR_REPOSITORY):$(IMAGE_TAG) \
+	# Build the base image
+	docker build --platform=linux/amd64 -t unifyops-core-base:latest -f docker/Dockerfile.base .
+	
+	# Build the environment-specific image using the local base image
+	docker build --platform=linux/amd64 -t $(ECR_REPOSITORY):$(IMAGE_TAG) \
+		-f docker/Dockerfile.$(ENV) \
 		--build-arg ENV=$(ENV) \
 		--build-arg BUILD_TIMESTAMP=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ') \
 		.
@@ -172,7 +224,7 @@ ci-ecr-push: ci-ecr-login
 	docker push $(ECR_REGISTRY)/$(ECR_REPOSITORY):$(IMAGE_TAG)
 	docker push $(ECR_REGISTRY)/$(ECR_REPOSITORY):latest
 	@echo "Verifying image exists in ECR..."
-	aws ecr describe-images --repository-name $(ECR_REPOSITORY) --image-ids imageTag=$(IMAGE_TAG)
+	aws ecr describe-images --region $(AWS_REGION) --repository-name $(ECR_REPOSITORY) --image-ids imageTag=$(IMAGE_TAG)
 
 ci-deploy: tf-init tf-plan tf-apply
 

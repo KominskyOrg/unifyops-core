@@ -3,7 +3,7 @@
 ###############################################################################
 
 # Default values
-PROJECT_NAME      := api
+PROJECT_NAME      ?= api
 ORG               ?= unifyops
 REGION            ?= us-east-1
 INFRA_ENV         ?= dev
