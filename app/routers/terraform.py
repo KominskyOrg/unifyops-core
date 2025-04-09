@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, Request, status, HTTPException
+from fastapi import APIRouter, Depends, Request, status, HTTPException, Query, Path
 from typing import Dict, Any, List, Optional
 import os
 from enum import Enum
+from pydantic import BaseModel
 
 from app.core.config import get_settings, Settings
-from app.core.terraform import TerraformService, TerraformOperation, TerraformResult
+from app.core.terraform import TerraformService, TerraformOperation, TerraformResult, EnvironmentGraph
 from app.core.exceptions import TerraformError, BadRequestError, NotFoundError, ErrorResponse
 from app.core.logging import get_logger
 from app.schemas.terraform import (
@@ -43,39 +44,187 @@ TF_DIR = os.path.join(BASE_DIR, "app/tf")
 
 # Create Terraform service
 terraform_service = TerraformService(TF_DIR)
+environment_graph = EnvironmentGraph(terraform_service)
+
+
+class ModuleResponse(BaseModel):
+    """Response model for module metadata"""
+    name: str
+    path: str
+    description: str
+    category: str
+    provider: str
+    variables: List[Dict[str, Any]]
+    outputs: List[Dict[str, Any]]
+    dependencies: List[str]
+    tags: List[str]
+
+
+class CreateEnvironmentRequest(BaseModel):
+    """Request model for creating a custom environment"""
+    modules: List[str]
+    variables: Optional[Dict[str, Dict[str, Any]]] = None
+    environment_name: str
+    description: Optional[str] = None
+
+
+class CreateEnvironmentResponse(BaseModel):
+    """Response model for environment creation"""
+    environment_path: str
+    modules: List[str]
 
 
 @router.get(
     "/modules",
-    response_model=ModulesResponse,
+    response_model=List[ModuleResponse],
     status_code=status.HTTP_200_OK,
     summary="List available Terraform modules",
     description="Returns a list of all available Terraform modules in the system.",
 )
-async def list_modules(
-    request: Request, settings: Settings = Depends(get_settings)
-) -> Dict[str, Any]:
+async def get_modules(
+    provider: Optional[str] = Query(None, description="Filter by cloud provider"),
+    category: Optional[str] = Query(None, description="Filter by category"),
+    tag: Optional[str] = Query(None, description="Filter by tag"),
+):
     """
-    List all available Terraform modules.
-
-    Args:
-        request: The HTTP request
-        settings: Application settings
-
-    Returns:
-        A dictionary containing the list of modules and total count.
+    Get available Terraform modules with optional filtering
     """
     correlation_id = getattr(request.state, "correlation_id", None)
-
     logger.info("Listing available Terraform modules", correlation_id=correlation_id)
 
-    # Get modules from the service
-    module_dicts = terraform_service.get_terraform_modules()
+    modules = terraform_service.get_terraform_modules()
+    
+    # Apply filters if provided
+    if provider:
+        modules = [m for m in modules if m["provider"] == provider]
+    
+    if category:
+        modules = [m for m in modules if m["category"] == category]
+        
+    if tag:
+        modules = [m for m in modules if tag in m.get("tags", [])]
+    
+    return modules
 
-    # Convert to TerraformModule instances
-    modules = [TerraformModule(**module_dict) for module_dict in module_dicts]
 
-    return {"modules": [module.model_dump() for module in modules], "count": len(modules)}
+@router.get("/modules/{module_path:path}", response_model=ModuleResponse)
+async def get_module_details(
+    module_path: str = Path(..., description="Path to the module"),
+):
+    """
+    Get detailed information about a specific module
+    """
+    correlation_id = getattr(request.state, "correlation_id", None)
+    logger.info(f"Getting detailed information about module: {module_path}", module_path=module_path, correlation_id=correlation_id)
+
+    modules = terraform_service.get_terraform_modules()
+    for module in modules:
+        if module["path"] == module_path:
+            return module
+    
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND, 
+        detail=f"Module {module_path} not found"
+    )
+
+
+@router.post("/environments", response_model=CreateEnvironmentResponse)
+async def create_environment(
+    request: CreateEnvironmentRequest,
+):
+    """
+    Create a custom environment configuration from selected modules
+    """
+    correlation_id = getattr(request.state, "correlation_id", None)
+    logger.info("Creating custom environment configuration", correlation_id=correlation_id)
+
+    # Validate that all modules exist
+    available_modules = terraform_service.get_terraform_modules()
+    available_paths = [m["path"] for m in available_modules]
+    
+    for module_path in request.modules:
+        if module_path not in available_paths:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Module {module_path} not found"
+            )
+    
+    # Create the environment configuration
+    try:
+        environment_path = environment_graph.create_environment_config(
+            modules=request.modules,
+            variables=request.variables,
+            environment_name=request.environment_name
+        )
+        
+        return CreateEnvironmentResponse(
+            environment_path=environment_path,
+            modules=request.modules
+        )
+    except Exception as e:
+        logger.error(f"Failed to create environment: {str(e)}", exception=e, correlation_id=correlation_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create environment: {str(e)}"
+        )
+
+
+@router.post("/environments/{environment_path:path}/apply", response_model=TerraformResult)
+async def apply_environment(
+    environment_path: str = Path(..., description="Path to the environment"),
+    auto_approve: bool = Query(False, description="Whether to auto-approve the apply"),
+    variables: Optional[Dict[str, Any]] = None,
+):
+    """
+    Apply a custom environment configuration
+    """
+    correlation_id = getattr(request.state, "correlation_id", None)
+    logger.info(f"Applying custom environment configuration: {environment_path}", environment_path=environment_path, correlation_id=correlation_id)
+
+    try:
+        # First initialize the environment
+        init_result = await terraform_service.init(environment_path)
+        if not init_result.success:
+            return init_result
+            
+        # Then apply the environment
+        return await terraform_service.apply(
+            module_path=environment_path,
+            variables=variables,
+            auto_approve=auto_approve
+        )
+    except Exception as e:
+        logger.error(f"Failed to apply environment: {str(e)}", exception=e, environment_path=environment_path, correlation_id=correlation_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to apply environment: {str(e)}"
+        )
+
+
+@router.delete("/environments/{environment_path:path}", response_model=TerraformResult)
+async def destroy_environment(
+    environment_path: str = Path(..., description="Path to the environment"),
+    auto_approve: bool = Query(False, description="Whether to auto-approve the destroy"),
+    variables: Optional[Dict[str, Any]] = None,
+):
+    """
+    Destroy resources in a custom environment
+    """
+    correlation_id = getattr(request.state, "correlation_id", None)
+    logger.info(f"Destroying resources in custom environment: {environment_path}", environment_path=environment_path, correlation_id=correlation_id)
+
+    try:
+        return await terraform_service.destroy(
+            module_path=environment_path,
+            variables=variables,
+            auto_approve=auto_approve
+        )
+    except Exception as e:
+        logger.error(f"Failed to destroy environment: {str(e)}", exception=e, environment_path=environment_path, correlation_id=correlation_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to destroy environment: {str(e)}"
+        )
 
 
 @router.post(

@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # Security settings
     SECRET_KEY: Optional[str] = os.getenv("SECRET_KEY")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+    
+    # Terraform settings
+    TERRAFORM_DIR: str = os.getenv("TERRAFORM_DIR", "tf")
+    TERRAFORM_LOG_LEVEL: str = os.getenv("TERRAFORM_LOG_LEVEL", "info")
 
     @field_validator("CORS_ORIGINS_STR", mode="before")
     def assemble_cors_origins(cls, v: Optional[str]) -> str:

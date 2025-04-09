@@ -1,5 +1,7 @@
-from typing import Dict, Any, List, Optional
-from pydantic import BaseModel, Field
+from typing import Dict, Any, List, Optional, Union
+from pydantic import BaseModel, Field, validator
+from uuid import UUID
+from datetime import datetime
 
 
 class ErrorResponse(BaseModel):
@@ -244,3 +246,273 @@ class OutputsResponse(BaseModel):
                 },
             }
         }
+
+
+# Base schemas 
+
+class OrganizationBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class TeamBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    organization_id: UUID
+
+
+class EnvironmentBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    organization_id: UUID
+    team_id: Optional[UUID] = None
+    variables: Optional[Dict[str, Any]] = None
+    tags: Optional[Dict[str, str]] = None
+
+
+class ResourceBase(BaseModel):
+    name: str
+    module_path: str
+    resource_type: str
+    provider: str
+    variables: Optional[Dict[str, Any]] = None
+    position_x: Optional[int] = None
+    position_y: Optional[int] = None
+
+
+class ConnectionBase(BaseModel):
+    source_id: UUID
+    target_id: UUID
+    connection_type: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    configuration: Optional[Dict[str, Any]] = None
+
+
+class CloudCredentialBase(BaseModel):
+    name: str
+    provider: str
+    organization_id: UUID
+    credentials: Dict[str, Any]
+    is_default: bool = False
+
+
+class ComplianceRuleBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    rule_type: str
+    provider: Optional[str] = None
+    resource_type: Optional[str] = None
+    rule_definition: Dict[str, Any]
+    severity: str
+    enabled: bool = True
+
+
+# Create request schemas
+
+class OrganizationCreate(OrganizationBase):
+    pass
+
+
+class TeamCreate(TeamBase):
+    pass
+
+
+class EnvironmentCreate(EnvironmentBase):
+    created_by: str
+
+
+class ResourceCreate(ResourceBase):
+    environment_id: UUID
+
+
+class ConnectionCreate(ConnectionBase):
+    pass
+
+
+class CloudCredentialCreate(CloudCredentialBase):
+    pass
+
+
+class ComplianceRuleCreate(ComplianceRuleBase):
+    pass
+
+
+# Update request schemas
+
+class OrganizationUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class TeamUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    organization_id: Optional[UUID] = None
+
+
+class EnvironmentUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    team_id: Optional[UUID] = None
+    variables: Optional[Dict[str, Any]] = None
+    tags: Optional[Dict[str, str]] = None
+
+
+class ResourceUpdate(BaseModel):
+    name: Optional[str] = None
+    variables: Optional[Dict[str, Any]] = None
+    position_x: Optional[int] = None
+    position_y: Optional[int] = None
+
+
+class ConnectionUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    configuration: Optional[Dict[str, Any]] = None
+
+
+class CloudCredentialUpdate(BaseModel):
+    name: Optional[str] = None
+    credentials: Optional[Dict[str, Any]] = None
+    is_default: Optional[bool] = None
+
+
+class ComplianceRuleUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    rule_definition: Optional[Dict[str, Any]] = None
+    severity: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+# Response schemas
+
+class OrganizationResponse(OrganizationBase):
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class TeamResponse(TeamBase):
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class ResourceResponse(ResourceBase):
+    id: UUID
+    environment_id: UUID
+    state: str
+    outputs: Optional[Dict[str, Any]] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class ConnectionResponse(ConnectionBase):
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class DeploymentResponse(BaseModel):
+    id: UUID
+    environment_id: UUID
+    execution_id: str
+    operation: str
+    status: str
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    initiated_by: str
+    output: Optional[str] = None
+    error: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
+class EnvironmentResponse(EnvironmentBase):
+    id: UUID
+    status: str
+    created_by: str
+    terraform_dir: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    last_deployed_at: Optional[datetime] = None
+    estimated_cost: Optional[float] = None
+    resources: List[ResourceResponse] = []
+    
+    class Config:
+        orm_mode = True
+
+
+class EnvironmentDetailResponse(EnvironmentResponse):
+    resources: List[ResourceResponse] = []
+    deployments: List[DeploymentResponse] = []
+
+    class Config:
+        orm_mode = True
+
+
+class CloudCredentialResponse(BaseModel):
+    id: UUID
+    name: str
+    provider: str
+    organization_id: UUID
+    is_default: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class ComplianceRuleResponse(ComplianceRuleBase):
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+# Special purpose schemas
+
+class EnvironmentDeployRequest(BaseModel):
+    """Request to deploy an environment"""
+    auto_approve: bool = False
+    variables: Optional[Dict[str, Any]] = None
+
+
+class EnvironmentResourcesRequest(BaseModel):
+    """Request to add multiple resources to an environment at once"""
+    resources: List[ResourceCreate]
+    connections: Optional[List[ConnectionCreate]] = None
+
+
+class DesignerStateRequest(BaseModel):
+    """Request to save the complete designer state for an environment"""
+    resources: List[ResourceCreate]
+    connections: List[ConnectionCreate]
+
+
+class DesignerStateResponse(BaseModel):
+    """Complete designer state for an environment"""
+    environment_id: UUID
+    resources: List[ResourceResponse]
+    connections: List[ConnectionResponse]
+
+    class Config:
+        orm_mode = True

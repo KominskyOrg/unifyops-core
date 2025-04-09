@@ -24,10 +24,7 @@ from app.core.exceptions import (
 from app.core.middleware import init_middleware
 
 # Import routers
-from app.routers import terraform, environment, resource
-
-# Import database initialization
-from app.db.init_db import init_db, run_migrations
+from app.routers import example, terraform, environments, terraform_templates
 
 # Configure structured logger
 logger = get_logger("main")
@@ -109,9 +106,19 @@ app.include_router(api_router)
 
 # Include other routers
 app.include_router(terraform.router)
-app.include_router(environment.router)
-app.include_router(resource.router)
+app.include_router(environments.router)
+app.include_router(terraform_templates.router)
 
+# Initialize Terraform module templates
+from app.core.terraform_templates import TemplateManager
+
+template_manager = TemplateManager(settings.TERRAFORM_DIR)
+
+# Make template manager available in app state
+@app.on_event("startup")
+async def startup_template_manager():
+    app.state.template_manager = template_manager
+    logger.info("Terraform template manager initialized")
 
 # Root endpoint (outside of API versioning)
 @app.get("/", tags=["Root"])
