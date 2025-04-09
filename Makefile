@@ -6,7 +6,7 @@
 # Development Commands
 .PHONY: install dev clean format init-db init-db-direct setup-db-permissions db-migration db-migrate
 # Testing Commands
-.PHONY: test lint coverage
+.PHONY: test lint coverage test-db-setup test-db-teardown
 # Docker Commands
 .PHONY: docker-build docker-up docker-down docker-logs docker-shell docker-exec docker-restart docker-prune
 # CI/CD Commands
@@ -127,8 +127,28 @@ db-migrate:
 
 # ----- Testing Commands -----
 
-test:
-	python3 -m pytest app/tests/ -v
+test-db-setup:
+	@echo "Setting up test PostgreSQL database..."
+	@docker-compose exec db psql -U postgres -c "DROP DATABASE IF EXISTS unifyops_test;"
+	@docker-compose exec db psql -U postgres -c "CREATE DATABASE unifyops_test;"
+	@echo "Running migrations on test database..."
+	@docker-compose exec -e SQLALCHEMY_DATABASE_URL="postgresql://postgres:postgres@db:5432/unifyops_test" api alembic upgrade head
+	@echo "Test database created and migrated successfully."
+
+test-db-teardown:
+	@echo "Tearing down test PostgreSQL database..."
+	@docker-compose exec db psql -U postgres -c "DROP DATABASE IF EXISTS unifyops_test;"
+	@echo "Test database removed successfully."
+
+test: test-db-setup
+	@echo "Running tests with PostgreSQL database..."
+	docker-compose exec api python -m pytest app/tests/ -v
+	@make test-db-teardown
+
+test-coverage: test-db-setup
+	@echo "Running test coverage with PostgreSQL database..."
+	docker-compose exec api python -m pytest --cov=app app/tests/ --cov-report=term --cov-report=html
+	@make test-db-teardown
 
 lint:
 	black --check app/
@@ -137,9 +157,6 @@ lint:
 lint-fix:
 	black app/
 	flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
-
-coverage:
-	python -m pytest --cov=app app/tests/ --cov-report=term --cov-report=html
 
 # ----- Docker Commands -----
 

@@ -82,6 +82,7 @@ class CreateEnvironmentResponse(BaseModel):
     description="Returns a list of all available Terraform modules in the system.",
 )
 async def get_modules(
+    request: Request,
     provider: Optional[str] = Query(None, description="Filter by cloud provider"),
     category: Optional[str] = Query(None, description="Filter by category"),
     tag: Optional[str] = Query(None, description="Filter by tag"),
@@ -109,6 +110,7 @@ async def get_modules(
 
 @router.get("/modules/{module_path:path}", response_model=ModuleResponse)
 async def get_module_details(
+    request: Request,
     module_path: str = Path(..., description="Path to the module"),
 ):
     """
@@ -130,7 +132,8 @@ async def get_module_details(
 
 @router.post("/environments", response_model=CreateEnvironmentResponse)
 async def create_environment(
-    request: CreateEnvironmentRequest,
+    request: Request,
+    env_request: CreateEnvironmentRequest,
 ):
     """
     Create a custom environment configuration from selected modules
@@ -142,7 +145,7 @@ async def create_environment(
     available_modules = terraform_service.get_terraform_modules()
     available_paths = [m["path"] for m in available_modules]
     
-    for module_path in request.modules:
+    for module_path in env_request.modules:
         if module_path not in available_paths:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -152,14 +155,14 @@ async def create_environment(
     # Create the environment configuration
     try:
         environment_path = environment_graph.create_environment_config(
-            modules=request.modules,
-            variables=request.variables,
-            environment_name=request.environment_name
+            modules=env_request.modules,
+            variables=env_request.variables,
+            environment_name=env_request.environment_name
         )
         
         return CreateEnvironmentResponse(
             environment_path=environment_path,
-            modules=request.modules
+            modules=env_request.modules
         )
     except Exception as e:
         logger.error(f"Failed to create environment: {str(e)}", exception=e, correlation_id=correlation_id)
@@ -171,6 +174,7 @@ async def create_environment(
 
 @router.post("/environments/{environment_path:path}/apply", response_model=TerraformResult)
 async def apply_environment(
+    request: Request,
     environment_path: str = Path(..., description="Path to the environment"),
     auto_approve: bool = Query(False, description="Whether to auto-approve the apply"),
     variables: Optional[Dict[str, Any]] = None,
@@ -203,6 +207,7 @@ async def apply_environment(
 
 @router.delete("/environments/{environment_path:path}", response_model=TerraformResult)
 async def destroy_environment(
+    request: Request,
     environment_path: str = Path(..., description="Path to the environment"),
     auto_approve: bool = Query(False, description="Whether to auto-approve the destroy"),
     variables: Optional[Dict[str, Any]] = None,

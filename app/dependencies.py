@@ -1,36 +1,29 @@
 from fastapi import Depends
+from typing import Optional
 import os
 
 from app.core.environment import EnvironmentService
-from app.core.resource import ResourceService
 from app.core.terraform import TerraformService
-from app.core.config import settings
+from app.core.config import get_settings, Settings
 
-# Base Terraform directory
+# Base directory for Terraform operations
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TF_DIR = os.path.join(BASE_DIR, "app/tf")
 
+# Create services
+terraform_service = TerraformService(TF_DIR)
+environment_service = EnvironmentService(terraform_service)
 
+# Service dependencies
 def get_terraform_service() -> TerraformService:
     """
     Dependency for TerraformService
     """
-    return TerraformService(TF_DIR)
+    return terraform_service
 
 
-def get_environment_service(
-    terraform_service: TerraformService = Depends(get_terraform_service),
-) -> EnvironmentService:
+def get_environment_service() -> EnvironmentService:
     """
     Dependency for EnvironmentService
     """
-    return EnvironmentService(terraform_service)
-
-
-def get_resource_service(
-    terraform_service: TerraformService = Depends(get_terraform_service),
-) -> ResourceService:
-    """
-    Dependency for ResourceService
-    """
-    return ResourceService(terraform_service) 
+    return environment_service 

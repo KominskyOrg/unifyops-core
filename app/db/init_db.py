@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 
 # Import models to include them in SQLAlchemy's metadata
-from app.models.environment import Environment
+from app.models.terraform import Environment
 
 logger = get_logger("db.init")
 

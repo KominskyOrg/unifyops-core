@@ -32,7 +32,7 @@ logger = logging.getLogger("db_init")
 # Import app modules after path setup
 from app.core.config import settings
 from app.db.database import SQLALCHEMY_DATABASE_URL, engine, schema_name
-from app.models.environment import Environment  # Import all models
+from app.models.terraform import Environment  # Import all models
 from app.db.database import Base
 from alembic.config import Config
 from alembic import command

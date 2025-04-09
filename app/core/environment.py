@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.logging import get_logger, get_background_task_logger
 from app.core.terraform import TerraformService, TerraformOperation, TerraformResult
-from app.models.environment import Environment, EnvironmentStatus
 from app.models.resource import Resource
 from app.core.exceptions import TerraformError, NotFoundError, BadRequestError
 

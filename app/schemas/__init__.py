@@ -9,6 +9,7 @@ from app.schemas.terraform import (
     ConnectionBase,
     CloudCredentialBase,
     ComplianceRuleBase,
+    DeploymentBase,
     
     # Create schemas
     OrganizationCreate,
@@ -18,6 +19,7 @@ from app.schemas.terraform import (
     ConnectionCreate,
     CloudCredentialCreate,
     ComplianceRuleCreate,
+    DeploymentCreate,
     
     # Update schemas
     OrganizationUpdate,
@@ -43,7 +45,15 @@ from app.schemas.terraform import (
     EnvironmentDeployRequest,
     EnvironmentResourcesRequest,
     DesignerStateRequest,
-    DesignerStateResponse
+    DesignerStateResponse,
+    ResourcePositionUpdate,
+    GenerateTerraformRequest,
+    DeployEnvironmentRequest,
+    ApplyModuleRequest,
+    TemplateVariableResponse,
+    TemplateOutputResponse,
+    TemplateDetailsResponse,
+    CreateModuleFromTemplateRequest
 )
 
 # Export all schemas
@@ -56,6 +66,7 @@ __all__ = [
     "ConnectionBase",
     "CloudCredentialBase",
     "ComplianceRuleBase",
+    "DeploymentBase",
     
     # Create schemas
     "OrganizationCreate",
@@ -65,6 +76,7 @@ __all__ = [
     "ConnectionCreate",
     "CloudCredentialCreate",
     "ComplianceRuleCreate",
+    "DeploymentCreate",
     
     # Update schemas
     "OrganizationUpdate",
@@ -90,5 +102,13 @@ __all__ = [
     "EnvironmentDeployRequest",
     "EnvironmentResourcesRequest",
     "DesignerStateRequest",
-    "DesignerStateResponse"
+    "DesignerStateResponse",
+    "ResourcePositionUpdate",
+    "GenerateTerraformRequest",
+    "DeployEnvironmentRequest",
+    "ApplyModuleRequest",
+    "TemplateVariableResponse",
+    "TemplateOutputResponse",
+    "TemplateDetailsResponse",
+    "CreateModuleFromTemplateRequest"
 ]

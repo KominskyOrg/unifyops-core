@@ -158,7 +158,7 @@ class Deployment(Base):
     execution_id = Column(String(36), nullable=False)  # Terraform execution ID
     operation = Column(String(50), nullable=False)  # init, plan, apply, destroy, etc.
     status = Column(String(50), default=DeploymentStatus.PENDING.value)
-    started_at = Column(DateTime, default=datetime.now(datetime.UTC))
+    started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     initiated_by = Column(String(255), nullable=False)  # Username or user ID
     output = Column(Text, nullable=True)  # Command output

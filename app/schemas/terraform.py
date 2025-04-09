@@ -4,6 +4,19 @@ from uuid import UUID
 from datetime import datetime
 
 
+class UUIDModelMixin:
+    """Mixin to automatically convert UUID objects to strings for comparison."""
+    
+    def __eq__(self, other):
+        if isinstance(other, (str, UUID)):
+            for field_name, field_type in self.__annotations__.items():
+                if field_type == UUID and hasattr(self, field_name):
+                    uuid_field = getattr(self, field_name)
+                    if uuid_field is not None and str(uuid_field) == str(other):
+                        return True
+        return super().__eq__(other)
+
+
 class ErrorResponse(BaseModel):
     """Error response model for API errors"""
 
@@ -278,6 +291,12 @@ class ResourceBase(BaseModel):
     variables: Optional[Dict[str, Any]] = None
     position_x: Optional[int] = None
     position_y: Optional[int] = None
+    
+    @validator('position_x', 'position_y')
+    def validate_positions(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Position values cannot be negative")
+        return v
 
 
 class ConnectionBase(BaseModel):
@@ -306,6 +325,14 @@ class ComplianceRuleBase(BaseModel):
     rule_definition: Dict[str, Any]
     severity: str
     enabled: bool = True
+
+
+class DeploymentBase(BaseModel):
+    environment_id: UUID
+    execution_id: str
+    operation: str
+    status: str
+    initiated_by: str
 
 
 # Create request schemas
@@ -338,6 +365,12 @@ class ComplianceRuleCreate(ComplianceRuleBase):
     pass
 
 
+class DeploymentCreate(BaseModel):
+    environment_id: UUID
+    operation: str
+    initiated_by: str
+
+
 # Update request schemas
 
 class OrganizationUpdate(BaseModel):
@@ -364,6 +397,12 @@ class ResourceUpdate(BaseModel):
     variables: Optional[Dict[str, Any]] = None
     position_x: Optional[int] = None
     position_y: Optional[int] = None
+    
+    @validator('position_x', 'position_y')
+    def validate_positions(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Position values cannot be negative")
+        return v
 
 
 class ConnectionUpdate(BaseModel):
@@ -438,6 +477,8 @@ class DeploymentResponse(BaseModel):
     initiated_by: str
     output: Optional[str] = None
     error: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         orm_mode = True
@@ -453,6 +494,7 @@ class EnvironmentResponse(EnvironmentBase):
     last_deployed_at: Optional[datetime] = None
     estimated_cost: Optional[float] = None
     resources: List[ResourceResponse] = []
+    connections: List[ConnectionResponse] = []
     
     class Config:
         orm_mode = True
@@ -490,6 +532,18 @@ class ComplianceRuleResponse(ComplianceRuleBase):
 
 # Special purpose schemas
 
+class ResourcePositionUpdate(BaseModel):
+    """Request to update a resource's position in the designer"""
+    position_x: int
+    position_y: int
+    
+    @validator('position_x', 'position_y')
+    def validate_positions(cls, v):
+        if v < 0:
+            raise ValueError("Position values cannot be negative")
+        return v
+
+
 class EnvironmentDeployRequest(BaseModel):
     """Request to deploy an environment"""
     auto_approve: bool = False
@@ -516,3 +570,55 @@ class DesignerStateResponse(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+class GenerateTerraformRequest(BaseModel):
+    """Request to generate Terraform code for an environment"""
+    environment_id: UUID
+    pretty_print: bool = False
+
+
+class DeployEnvironmentRequest(BaseModel):
+    """Request to deploy an environment"""
+    environment_id: UUID
+    initiated_by: str = "system"
+
+
+class ApplyModuleRequest(BaseModel):
+    """Request to apply a specific module to an environment"""
+    environment_id: UUID
+    module_path: str
+    variables: Optional[Dict[str, Any]] = None
+
+
+class TemplateVariableResponse(BaseModel):
+    """Response model for a template variable"""
+    name: str
+    type: str
+    description: str
+    default: Optional[Any] = None
+    required: bool = False
+
+
+class TemplateOutputResponse(BaseModel):
+    """Response model for a template output"""
+    name: str
+    description: str
+    value: str
+
+
+class TemplateDetailsResponse(BaseModel):
+    """Response model for template details"""
+    name: str
+    description: str
+    provider: str
+    variables: List[TemplateVariableResponse]
+    outputs: List[TemplateOutputResponse]
+    resource_types: List[str]
+
+
+class CreateModuleFromTemplateRequest(BaseModel):
+    """Request to create a module from a template"""
+    template_name: str
+    module_name: str
+    variables: Dict[str, Any]

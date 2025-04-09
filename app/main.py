@@ -24,7 +24,10 @@ from app.core.exceptions import (
 from app.core.middleware import init_middleware
 
 # Import routers
-from app.routers import example, terraform, environments, terraform_templates
+from app.routers import terraform, environments, terraform_templates
+
+# Import state module for app-wide state
+import app.state
 
 # Configure structured logger
 logger = get_logger("main")
@@ -117,7 +120,12 @@ template_manager = TemplateManager(settings.TERRAFORM_DIR)
 # Make template manager available in app state
 @app.on_event("startup")
 async def startup_template_manager():
+    # Set in app.state for direct access from app instance
     app.state.template_manager = template_manager
+    
+    # Also set in the state module for import-based access
+    app.state.template_manager = template_manager
+    
     logger.info("Terraform template manager initialized")
 
 # Root endpoint (outside of API versioning)
