@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, Request, status, HTTPException, BackgroundTasks, Response
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 import os
@@ -563,3 +563,73 @@ async def get_environment_status(
             correlation_id=correlation_id,
         )
         raise TerraformError(f"Failed to retrieve environment status: {str(e)}")
+
+
+@router.delete(
+    "/{environment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete an environment",
+    description="""
+    Delete a Terraform environment and all its associated infrastructure.
+    This operation will first run `terraform destroy` to remove all provisioned resources,
+    then delete the environment record from the database.
+    """,
+    responses={
+        status.HTTP_204_NO_CONTENT: {"description": "Environment deleted successfully"},
+        status.HTTP_404_NOT_FOUND: {
+            "description": "Environment not found",
+            "model": ErrorResponse
+        },
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "Invalid operation",
+            "model": ErrorResponse
+        },
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {
+            "description": "Error during deletion",
+            "model": ErrorResponse
+        }
+    }
+)
+async def delete_environment(
+    request: Request,
+    environment_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """
+    Delete an environment and all its associated infrastructure
+    
+    Args:
+        request: The HTTP request
+        environment_id: Environment ID
+        background_tasks: Background tasks
+        db: Database session
+        settings: Application settings
+        
+    Returns:
+        None: 204 No Content response
+    """
+    correlation_id = getattr(request.state, "correlation_id", None)
+    
+    logger.info(
+        f"Deleting environment: {environment_id}",
+        environment_id=environment_id,
+        correlation_id=correlation_id,
+    )
+    
+    # Check if the environment exists
+    environment = environment_service.get_environment(db, environment_id)
+    if not environment:
+        raise NotFoundError(f"Environment not found: {environment_id}")
+        
+    # Add the delete operation as a background task
+    background_tasks.add_task(
+        environment_service.delete_environment,
+        db=db,
+        environment_id=environment_id,
+        correlation_id=correlation_id,
+    )
+    
+    # Return 204 No Content
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

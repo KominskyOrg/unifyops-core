@@ -689,3 +689,122 @@ class EnvironmentService:
             )
         
         return status_info
+
+    async def delete_environment(
+        self,
+        db: Session,
+        environment_id: str,
+        correlation_id: Optional[str] = None
+    ):
+        """
+        Delete an environment and its associated infrastructure
+        
+        Args:
+            db: Database session
+            environment_id: Environment ID
+            correlation_id: Correlation ID for request tracing
+        """
+        # Set up logging for this background task
+        task_logger = get_background_task_logger("environment", environment_id)
+        
+        # Get the environment
+        environment = self.get_environment(db, environment_id)
+        if not environment:
+            task_logger.error(
+                f"Environment not found: {environment_id}",
+                environment_id=environment_id,
+                correlation_id=correlation_id,
+            )
+            return
+        
+        task_logger.info(
+            f"Starting destruction of environment: {environment.name}",
+            environment_id=environment_id,
+            module_path=environment.module_path,
+            correlation_id=correlation_id,
+        )
+        
+        # Update environment status to indicate deletion in progress
+        self.update_environment_status(db, environment_id, EnvironmentStatus.DESTROYING)
+        
+        try:
+            # 1. Make sure the directory exists
+            module_path = os.path.join(self.terraform_service.base_dir, environment.module_path)
+            if not os.path.exists(module_path):
+                raise NotFoundError(f"Module path not found: {environment.module_path}")
+            
+            # 2. Run terraform init to ensure backend is configured
+            init_result = await self.terraform_service.init(
+                module_path=environment.module_path,
+                backend_config=self._get_backend_config(environment_id),
+                correlation_id=correlation_id,
+            )
+            
+            if not init_result.success:
+                error_message = init_result.error or "Unknown init error"
+                task_logger.error(
+                    f"Failed to initialize Terraform for environment deletion: {error_message}",
+                    environment_id=environment_id,
+                    module_path=environment.module_path,
+                    correlation_id=correlation_id,
+                )
+                self.update_environment_status(db, environment_id, EnvironmentStatus.FAILED, error_message)
+                return
+            
+            # 3. Collect variables for this environment
+            variables = self._collect_resource_variables(db, environment_id)
+            
+            # 4. Run terraform destroy
+            destroy_result = await self.terraform_service.destroy(
+                module_path=environment.module_path,
+                variables=variables,
+                auto_approve=True,  # Auto-approve the destroy
+                correlation_id=correlation_id,
+            )
+            
+            if not destroy_result.success:
+                error_message = destroy_result.error or "Unknown destroy error"
+                task_logger.error(
+                    f"Failed to destroy environment infrastructure: {error_message}",
+                    environment_id=environment_id,
+                    module_path=environment.module_path,
+                    correlation_id=correlation_id,
+                )
+                self.update_environment_status(db, environment_id, EnvironmentStatus.FAILED, error_message)
+                return
+            
+            # 5. Delete the environment record from the database
+            task_logger.info(
+                f"Successfully destroyed environment infrastructure, deleting database record",
+                environment_id=environment_id,
+                module_path=environment.module_path,
+                correlation_id=correlation_id,
+            )
+            
+            # Delete environment from database
+            db.delete(environment)
+            db.commit()
+            
+            task_logger.info(
+                f"Successfully deleted environment: {environment.name}",
+                environment_id=environment_id,
+                correlation_id=correlation_id,
+            )
+            
+        except Exception as e:
+            error_message = str(e)
+            task_logger.error(
+                f"Error during environment deletion: {error_message}",
+                environment_id=environment_id,
+                exception=e,
+                correlation_id=correlation_id,
+            )
+            # Update status to FAILED if an unexpected error occurs
+            try:
+                self.update_environment_status(db, environment_id, EnvironmentStatus.FAILED, error_message)
+            except Exception as status_update_e:
+                task_logger.error(
+                    f"Failed to update status to FAILED after delete error: {status_update_e}",
+                    environment_id=environment_id,
+                    correlation_id=correlation_id,
+                )
