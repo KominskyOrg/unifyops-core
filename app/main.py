@@ -24,7 +24,7 @@ from app.core.exceptions import (
 from app.core.middleware import init_middleware
 
 # Import routers
-from app.routers import example, terraform, environment, resource
+from app.routers import terraform, environment, resource
 
 # Import database initialization
 from app.db.init_db import init_db, run_migrations
@@ -108,7 +108,6 @@ async def api_root(request: Request, settings=Depends(get_settings)):
 app.include_router(api_router)
 
 # Include other routers
-app.include_router(example.router, prefix="/api/v1")
 app.include_router(terraform.router)
 app.include_router(environment.router)
 app.include_router(resource.router)
