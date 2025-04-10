@@ -76,7 +76,7 @@ class CreateEnvironmentResponse(BaseModel):
 
 @router.get(
     "/modules",
-    response_model=List[ModuleResponse],
+    response_model=ModulesResponse,
     status_code=status.HTTP_200_OK,
     summary="List available Terraform modules",
     description="Returns a list of all available Terraform modules in the system.",
@@ -105,7 +105,7 @@ async def get_modules(
     if tag:
         modules = [m for m in modules if tag in m.get("tags", [])]
     
-    return modules
+    return ModulesResponse(modules=modules, count=len(modules))
 
 
 @router.get("/modules/{module_path:path}", response_model=ModuleResponse)

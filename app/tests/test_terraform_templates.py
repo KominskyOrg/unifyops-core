@@ -6,12 +6,10 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.core.terraform_templates import TemplateManager, ModuleTemplate, AWSS3BucketTemplate
-import app.state
 
 # Create a test client that will be used by all tests
 client = TestClient(app)
 
-# Setup the app.state.template_manager before tests run
 @pytest.fixture(autouse=True)
 def setup_app_state():
     """
@@ -22,9 +20,7 @@ def setup_app_state():
     mock_tm = MagicMock(spec=TemplateManager)
     # Set it in the app state
     app.state.template_manager = mock_tm
-    # Set it in the app.state module (for import-based access)
-    app.state.template_manager = mock_tm
-    yield
+    yield mock_tm
     # Cleanup after tests
     if hasattr(app.state, "template_manager"):
         delattr(app.state, "template_manager")
@@ -33,7 +29,7 @@ def setup_app_state():
 @pytest.fixture
 def mock_template_manager():
     """Fixture to mock the TemplateManager."""
-    with patch("app.state.template_manager") as mock_manager:
+    with patch("app.core.terraform_templates.TemplateManager") as mock_manager:
         yield mock_manager
 
 
@@ -105,7 +101,7 @@ def sample_template_details():
 def test_list_templates(mock_template_manager, sample_templates):
     """Test listing available templates."""
     # Configure the mock to return our sample templates
-    mock_template_manager.get_available_templates.return_value = sample_templates
+    app.state.template_manager.get_available_templates.return_value = sample_templates
     
     # Call the endpoint
     response = client.get("/terraform/templates/")
@@ -119,29 +115,28 @@ def test_list_templates(mock_template_manager, sample_templates):
     assert data[2]["id"] == "azure/storage/storage_account"
     
     # Verify template manager was called correctly
-    mock_template_manager.get_available_templates.assert_called_once()
+    app.state.template_manager.get_available_templates.assert_called_once()
 
 
 def test_list_templates_with_filter(mock_template_manager, sample_templates):
     """Test listing templates with filtering."""
     # Configure the mock to return our sample templates
-    mock_template_manager.get_available_templates.return_value = sample_templates
+    app.state.template_manager.get_available_templates.return_value = sample_templates
     
     # Call the endpoint with provider filter
     response = client.get("/terraform/templates/?provider=aws")
     
     # We're not mocking the filtering logic, as it's handled by the route function
-    # Just test that the endpoint is callable and doesn't raise errors
     assert response.status_code == 200
     
     # Verify template manager was called correctly
-    mock_template_manager.get_available_templates.assert_called_once()
+    app.state.template_manager.get_available_templates.assert_called_once()
 
 
 def test_get_template_details(mock_template_manager, sample_template_details):
     """Test getting detailed information about a template."""
     # Configure the mock to return our sample template details
-    mock_template_manager.get_template_details.return_value = sample_template_details
+    app.state.template_manager.get_template_details.return_value = sample_template_details
     
     # Call the endpoint
     response = client.get("/terraform/templates/aws/storage/s3_bucket")
@@ -155,13 +150,13 @@ def test_get_template_details(mock_template_manager, sample_template_details):
     assert len(data["outputs"]) == 2
     
     # Verify template manager was called correctly
-    mock_template_manager.get_template_details.assert_called_once_with("aws/storage/s3_bucket")
+    app.state.template_manager.get_template_details.assert_called_once_with("aws/storage/s3_bucket")
 
 
 def test_get_template_details_not_found(mock_template_manager):
     """Test handling of template not found."""
     # Configure the mock to raise ValueError
-    mock_template_manager.get_template_details.side_effect = ValueError("Template not found")
+    app.state.template_manager.get_template_details.side_effect = ValueError("Template not found")
     
     # Call the endpoint
     response = client.get("/terraform/templates/nonexistent")
@@ -172,13 +167,13 @@ def test_get_template_details_not_found(mock_template_manager):
     assert "not found" in data["detail"].lower()
     
     # Verify template manager was called correctly
-    mock_template_manager.get_template_details.assert_called_once_with("nonexistent")
+    app.state.template_manager.get_template_details.assert_called_once_with("nonexistent")
 
 
 def test_create_module_from_template(mock_template_manager):
     """Test creating a module from a template."""
     # Configure the mock
-    mock_template_manager.create_module_from_template.return_value = "custom/aws/s3_bucket"
+    app.state.template_manager.create_module_from_template.return_value = "custom/aws/s3_bucket"
     
     # Request data
     request_data = {
@@ -199,7 +194,7 @@ def test_create_module_from_template(mock_template_manager):
     assert data["template_id"] == "aws/storage/s3_bucket"
     
     # Verify template manager was called correctly
-    mock_template_manager.create_module_from_template.assert_called_once_with(
+    app.state.template_manager.create_module_from_template.assert_called_once_with(
         template_id="aws/storage/s3_bucket",
         target_path="custom/aws/s3_bucket",
         variables={"bucket_name": "my-unique-bucket"}
@@ -210,7 +205,7 @@ def test_create_module_from_template_error(mock_template_manager):
     """Test handling of errors when creating a module from a template."""
     # Configure the mock to raise ValueError
     error_message = "Target directory already exists"
-    mock_template_manager.create_module_from_template.side_effect = ValueError(error_message)
+    app.state.template_manager.create_module_from_template.side_effect = ValueError(error_message)
     
     # Request data
     request_data = {
@@ -228,7 +223,11 @@ def test_create_module_from_template_error(mock_template_manager):
     assert error_message in data["detail"]
     
     # Verify template manager was called correctly
-    mock_template_manager.create_module_from_template.assert_called_once()
+    app.state.template_manager.create_module_from_template.assert_called_once_with(
+        template_id="aws/storage/s3_bucket",
+        target_path="existing/path",
+        variables={}
+    )
 
 
 # Unit tests for the TemplateManager class
