@@ -9,9 +9,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from pydantic import BaseModel
 
 from app.core.exceptions import TerraformError
-from app.core.logging import get_logger
+from app.logging.context import get_logger
 
-logger = get_logger("terraform")
+logger = get_logger("terraform", metadata={"component": "terraform"})
 
 
 class TerraformOperation(str, Enum):
@@ -113,18 +113,22 @@ async def run_terraform_command(
         except Exception as e:
             logger.error(
                 "Failed to create variable file",
-                exception=e,
-                execution_id=execution_id,
-                correlation_id=correlation_id,
+                metadata={
+                    "exception": e,
+                    "execution_id": execution_id,
+                    "correlation_id": correlation_id,
+                }
             )
             raise TerraformError(f"Failed to create variable file: {str(e)}")
 
     # Log the full command
     logger.debug(
         f"Executing Terraform command: {' '.join(cmd)}",
-        command=" ".join(cmd),
-        execution_id=execution_id,
-        correlation_id=correlation_id,
+        metadata={
+            "command": " ".join(cmd),
+            "execution_id": execution_id,
+            "correlation_id": correlation_id,
+        }
     )
 
     try:

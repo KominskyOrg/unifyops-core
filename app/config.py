@@ -23,7 +23,8 @@ class Settings(BaseSettings):
 
     # Environment settings
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
-    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "info")
+    SERVICE_NAME: str = os.getenv("SERVICE_NAME", "unifyops-core")
+    VERSION: str = os.getenv("VERSION", "0.1.0")
 
     # Logging settings
     LOG_TO_FILE: bool = os.getenv("LOG_TO_FILE", "false").lower() == "true"
@@ -32,9 +33,15 @@ class Settings(BaseSettings):
     LOG_MAX_SIZE_MB: int = int(os.getenv("LOG_MAX_SIZE_MB", "10"))
     LOG_BACKUP_COUNT: int = int(os.getenv("LOG_BACKUP_COUNT", "5"))
     TERRAFORM_LOG_LEVEL: str = os.getenv("TERRAFORM_LOG_LEVEL", "info")
+    LOG_STYLE: str = os.getenv("LOG_STYLE", "auto")
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "info")
+    LOG_RETENTION_DAYS: int = int(os.getenv("LOG_RETENTION_DAYS", "30"))
 
     # CORS settings
-    CORS_ORIGINS_STR: str = "http://localhost:3000,http://localhost:8000"
+    CORS_ALLOW_ORIGINS: str = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000,http://localhost:8000,http://localhost:5175")
+    CORS_ALLOW_CREDENTIALS: bool = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
+    CORS_ALLOW_METHODS: str = os.getenv("CORS_ALLOW_METHODS", "GET,POST,PUT,DELETE,OPTIONS")
+    CORS_ALLOW_HEADERS: str = os.getenv("CORS_ALLOW_HEADERS", "Content-Type,Authorization")
 
     # Database settings (if added later)
     DATABASE_URL: Optional[str] = os.getenv("DATABASE_URL")
@@ -47,13 +54,17 @@ class Settings(BaseSettings):
     TERRAFORM_DIR: str = os.getenv("TERRAFORM_DIR", "tf")
     TERRAFORM_LOG_LEVEL: str = os.getenv("TERRAFORM_LOG_LEVEL", "info")
 
-    @field_validator("CORS_ORIGINS_STR", mode="before")
-    def assemble_cors_origins(cls, v: Optional[str]) -> str:
-        return os.getenv("CORS_ORIGINS", v)
-
     @property
     def CORS_ORIGINS(self) -> List[str]:
-        return [origin.strip() for origin in self.CORS_ORIGINS_STR.split(",")]
+        return [origin.strip() for origin in self.CORS_ALLOW_ORIGINS.split(",")]
+
+    @property
+    def CORS_METHODS(self) -> List[str]:
+        return [method.strip() for method in self.CORS_ALLOW_METHODS.split(",")]
+
+    @property
+    def CORS_HEADERS(self) -> List[str]:
+        return [header.strip() for header in self.CORS_ALLOW_HEADERS.split(",")]
 
     class Config:
         env_file = ".env"

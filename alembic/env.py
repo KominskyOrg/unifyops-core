@@ -10,7 +10,7 @@ from sqlalchemy import pool
 from alembic import context
 
 # Import settings from app
-from app.core.config import settings
+from app.config import settings
 from app.db.database import schema_name
 
 # this is the Alembic Config object, which provides

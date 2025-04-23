@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
-from app.core.config import settings
+from app.config import settings
 
 # Use our new fixtures for testing
 def test_health_check(client):

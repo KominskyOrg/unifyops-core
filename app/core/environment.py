@@ -4,12 +4,12 @@ import os
 from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session, joinedload
 
-from app.core.logging import get_logger, get_background_task_logger
+from app.logging.context import get_logger
 from app.core.terraform import TerraformService, TerraformOperation, TerraformResult
 from app.models.resource import Resource
 from app.core.exceptions import TerraformError, NotFoundError, BadRequestError
 
-logger = get_logger("environment")
+logger = get_logger("environment", metadata={"component": "environment"})
 
 
 class EnvironmentService:
@@ -239,11 +239,17 @@ class EnvironmentService:
 
         correlation_id = environment.correlation_id or str(uuid.uuid4())
         self.update_environment_status(db, environment_id, EnvironmentStatus.INITIALIZING)
-        task_logger = get_background_task_logger("environment", environment_id)
+        task_logger = get_logger("environment", metadata={"environment_id": environment_id})
 
         try:
             backend_config = self._get_backend_config(environment_id)
-            task_logger.info("Starting Terraform init", correlation_id=correlation_id, backend_config=backend_config)
+            task_logger.info(
+                "Starting Terraform init", 
+                metadata={
+                    "correlation_id": correlation_id, 
+                    "backend_config": backend_config
+                }
+            )
 
             init_result = await self.terraform_service.init(
                 module_path=environment.module_path,
@@ -259,15 +265,23 @@ class EnvironmentService:
                 error_message = init_result.error or "Initialization failed"
                 task_logger.error(
                     f"Terraform init failed: {error_message}",
-                    environment_id=environment_id,
-                    error=error_message,
-                    correlation_id=correlation_id,
+                    metadata={
+                        "environment_id": environment_id,
+                        "error": error_message,
+                        "correlation_id": correlation_id,
+                    }
                 )
                 self.update_environment_status(
                     db, environment_id, EnvironmentStatus.FAILED, error_message
                 )
             else:
-                task_logger.info("Terraform init successful", execution_id=init_result.execution_id, duration_ms=init_result.duration_ms)
+                task_logger.info(
+                    "Terraform init successful", 
+                    metadata={
+                        "execution_id": init_result.execution_id, 
+                        "duration_ms": init_result.duration_ms
+                    }
+                )
                 # Update status only if init ran successfully and it wasn't part of a larger provisioning task
                 if environment.status == EnvironmentStatus.INITIALIZING:
                      self.update_environment_status(db, environment_id, EnvironmentStatus.PENDING)
@@ -278,9 +292,11 @@ class EnvironmentService:
             error_message = str(e)
             task_logger.error(
                 f"Error initializing environment: {error_message}",
-                environment_id=environment_id,
-                exception=e,
-                correlation_id=correlation_id,
+                metadata={
+                    "environment_id": environment_id,
+                    "exception": e,
+                    "correlation_id": correlation_id,
+                }
             )
             self.update_environment_status(
                 db, environment_id, EnvironmentStatus.FAILED, error_message
@@ -309,25 +325,48 @@ class EnvironmentService:
         task_logger = get_background_task_logger("environment", environment_id)
 
         try:
-            # Ensure environment is initialized
-            if not environment.init_execution_id:
-                task_logger.info("Environment not initialized, running init first.", correlation_id=correlation_id)
-                init_result = await self.run_terraform_init(db, environment_id)
-                if not init_result.success:
-                    # Status already set to FAILED by init
-                    return init_result # Return init failure result
+            # First, make sure the environment is initialized
+            if not await self.is_environment_initialized(db, environment_id):
+                task_logger.info(
+                    "Environment not initialized, running init first.", 
+                    metadata={"correlation_id": correlation_id}
+                )
+                await self.initialize_environment(db, environment_id, correlation_id=correlation_id)
+                
+            # Fetch environment details after possible initialization
+            environment = self.get_environment(db, environment_id)
             
-            # Collect variables from environment and all associated resources
-            task_logger.info("Collecting resource variables for plan", correlation_id=correlation_id)
-            all_variables = self._collect_resource_variables(db, environment_id)
+            # Get variables from resources
+            task_logger.info(
+                "Collecting resource variables for plan", 
+                metadata={"correlation_id": correlation_id}
+            )
+            
+            # Get backend config
+            backend_config = self._get_backend_config(environment_id)
+            
+            # Get all variables including resources
+            all_variables = self._get_all_variables_for_environment(db, environment_id)
 
+            # PLAN PHASE
+            # Update status to PLANNING
+            self.update_environment_status(db, environment_id, EnvironmentStatus.PLANNING)
+            
+            # Start Terraform plan
             task_logger.info(
                 f"Starting Terraform plan with {len(all_variables.get('resource_definitions', {}))} resource definitions", 
-                correlation_id=correlation_id
+                metadata={
+                    "correlation_id": correlation_id,
+                    "resource_count": len(all_variables.get('resource_definitions', {}))
+                }
             )
+            
+            # Run terraform plan
             plan_result = await self.terraform_service.plan(
                 module_path=environment.module_path,
-                variables=all_variables, # Pass combined variables
+                variables=all_variables,
+                backend_config=backend_config,
+                detailed_exitcode=True,  # Return detailed exit code
                 correlation_id=correlation_id,
             )
 
@@ -339,9 +378,11 @@ class EnvironmentService:
                 error_message = plan_result.error or "Planning failed"
                 task_logger.error(
                     f"Terraform plan failed: {error_message}",
-                    environment_id=environment_id,
-                    error=error_message,
-                    correlation_id=correlation_id,
+                    metadata={
+                        "environment_id": environment_id,
+                        "error": error_message,
+                        "correlation_id": correlation_id,
+                    }
                 )
                 self.update_environment_status(
                     db, environment_id, EnvironmentStatus.FAILED, error_message
@@ -349,9 +390,11 @@ class EnvironmentService:
             else:
                 task_logger.info(
                     "Terraform plan successful", 
-                    execution_id=plan_result.execution_id, 
-                    duration_ms=plan_result.duration_ms,
-                    plan_id=plan_result.plan_id
+                    metadata={
+                        "execution_id": plan_result.execution_id, 
+                        "duration_ms": plan_result.duration_ms,
+                        "plan_id": plan_result.plan_id
+                    }
                 )
                 # Update status only if plan ran successfully and it wasn't part of provisioning
                 if environment.status == EnvironmentStatus.PLANNING:
@@ -365,9 +408,11 @@ class EnvironmentService:
             error_message = str(e)
             task_logger.error(
                 f"Error planning environment: {error_message}",
-                environment_id=environment_id,
-                exception=e,
-                correlation_id=correlation_id,
+                metadata={
+                    "environment_id": environment_id,
+                    "exception": e,
+                    "correlation_id": correlation_id,
+                }
             )
             self.update_environment_status(
                 db, environment_id, EnvironmentStatus.FAILED, error_message
@@ -415,14 +460,16 @@ class EnvironmentService:
 
             task_logger.info(
                 f"Starting Terraform apply with {len(all_variables.get('resource_definitions', {}))} resource definitions", 
-                correlation_id=correlation_id,
-                plan_id=environment.plan_execution_id # Log the plan being applied
+                metadata={
+                    "correlation_id": correlation_id,
+                    "plan_id": environment.plan_execution_id # Log the plan being applied
+                }
             )
             
             # Run terraform apply - assuming auto_approve=True for background tasks/API calls
             apply_result = await self.terraform_service.apply(
                 module_path=environment.module_path,
-                variables=all_variables, # Pass combined variables
+                variables=all_variables, # Pass collected variables
                 backend_config=backend_config, # Needed if apply does its own state locking/reading
                 auto_approve=True, 
                 plan_id=environment.plan_execution_id, # Optionally apply a specific plan file
@@ -437,9 +484,11 @@ class EnvironmentService:
                 error_message = apply_result.error or "Apply failed"
                 task_logger.error(
                     f"Terraform apply failed: {error_message}",
-                    environment_id=environment_id,
-                    error=error_message,
-                    correlation_id=correlation_id,
+                    metadata={
+                        "environment_id": environment_id,
+                        "error": error_message,
+                        "correlation_id": correlation_id,
+                    }
                 )
                 self.update_environment_status(
                     db, environment_id, EnvironmentStatus.FAILED, error_message
@@ -447,8 +496,10 @@ class EnvironmentService:
             else:
                 task_logger.info(
                     "Terraform apply successful", 
-                    execution_id=apply_result.execution_id, 
-                    duration_ms=apply_result.duration_ms
+                    metadata={
+                        "execution_id": apply_result.execution_id, 
+                        "duration_ms": apply_result.duration_ms
+                    }
                 )
                 # Update status to PROVISIONED
                 self.update_environment_status(db, environment_id, EnvironmentStatus.PROVISIONED)
@@ -459,9 +510,11 @@ class EnvironmentService:
             error_message = str(e)
             task_logger.error(
                 f"Error applying environment: {error_message}",
-                environment_id=environment_id,
-                exception=e,
-                correlation_id=correlation_id,
+                metadata={
+                    "environment_id": environment_id,
+                    "exception": e,
+                    "correlation_id": correlation_id,
+                }
             )
             self.update_environment_status(
                 db, environment_id, EnvironmentStatus.FAILED, error_message
@@ -510,17 +563,15 @@ class EnvironmentService:
 
             # 3. Check if we should apply (based on environment setting)
             if environment.auto_apply == "True":
-                task_logger.info("Auto-apply enabled, proceeding with apply phase.", correlation_id=correlation_id)
-                # Run terraform apply (uses collected variables)
-                apply_result = await self.run_terraform_apply(db, environment_id)
-                if not apply_result.success:
-                    # Status already set by apply
-                    return
-                    
-                # Apply successful, status is PROVISIONED (set by apply)
+                # APPLY PHASE (if auto_apply=True)
+                # Continue with apply if requested
                 task_logger.info(
-                    f"Environment provisioned successfully: {environment.name}",
-                    correlation_id=correlation_id,
+                    "Auto-apply enabled, proceeding with apply phase.", 
+                    metadata={"correlation_id": correlation_id}
+                )
+                
+                return await self.apply_environment(
+                    db, environment_id, correlation_id=correlation_id
                 )
             else:
                 # Auto-apply is false, stop after plan
@@ -535,9 +586,11 @@ class EnvironmentService:
             error_message = str(e)
             task_logger.error(
                 f"Error during environment provisioning workflow: {error_message}",
-                environment_id=environment_id,
-                exception=e,
-                correlation_id=correlation_id,
+                metadata={
+                    "environment_id": environment_id,
+                    "exception": e,
+                    "correlation_id": correlation_id,
+                }
             )
             # Ensure status is set to FAILED if an unexpected error occurs
             try:
@@ -549,7 +602,12 @@ class EnvironmentService:
             # Remove from running tasks list
             if environment_id in self.running_tasks:
                 del self.running_tasks[environment_id]
-            task_logger.info("Environment provisioning task finished.", correlation_id=correlation_id)
+            # Log completion (success status already set by provision_environment)
+            task_logger = get_logger("environment.provisioning")
+            task_logger.info(
+                "Environment provisioning task finished.", 
+                metadata={"correlation_id": correlation_id}
+            )
 
     def start_provisioning_task(self, db: Session, environment_id: str):
         """

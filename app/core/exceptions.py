@@ -1,3 +1,18 @@
+################################################################################
+# DEPRECATION NOTICE
+################################################################################
+# This module is deprecated and will be removed in a future version.
+# Please migrate to the new exceptions package instead:
+#
+# from app.exceptions import AppException, BadRequestError, NotFoundError, ...
+#
+# The new package provides more specific exception types, better logging
+# integration, and improved error handling utilities. 
+#
+# For a complete migration guide, see:
+# docs/migration_to_new_exceptions.md
+################################################################################
+
 from typing import Any, Dict, List, Optional, Union
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -7,7 +22,9 @@ from pydantic import BaseModel
 import traceback
 import uuid
 
-from app.core.logging import logger
+from app.logging.context import get_logger
+
+logger = get_logger("core.exceptions", metadata={"component": "exceptions"})
 
 
 class ErrorDetail(BaseModel):
@@ -142,11 +159,13 @@ async def app_exception_handler(request: Request, exc: AppException) -> JSONResp
     # Log the exception
     logger.error(
         f"{exc.error_type}: {exc.message}",
-        exception=exc,
-        path=request.url.path,
-        method=request.method,
-        error_id=exc.error_id,
-        status_code=exc.status_code,
+        metadata={
+            "exception": exc,
+            "path": request.url.path,
+            "method": request.method,
+            "error_id": exc.error_id,
+            "status_code": exc.status_code,
+        }
     )
 
     # Convert details to ErrorDetail objects if provided
@@ -177,10 +196,12 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     # Log the exception
     logger.error(
         f"HTTP {exc.status_code}: {exc.detail}",
-        path=request.url.path,
-        method=request.method,
-        error_id=error_id,
-        status_code=exc.status_code,
+        metadata={
+            "path": request.url.path,
+            "method": request.method,
+            "error_id": error_id,
+            "status_code": exc.status_code,
+        }
     )
 
     # Return standardized error response
@@ -211,19 +232,21 @@ async def validation_exception_handler(
     # Log the validation error with complete details
     logger.error(
         f"Validation error: {readable_errors}",
-        path=request.url.path,
-        method=request.method,
-        error_id=error_id,
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        # Convert validation errors to a safe format for JSON
-        errors=[
-            {
-                "loc": [str(loc) for loc in error["loc"]],
-                "msg": str(error["msg"]),
-                "type": str(error["type"]),
-            }
-            for error in exc.errors()
-        ],
+        metadata={
+            "path": request.url.path,
+            "method": request.method,
+            "error_id": error_id,
+            "status_code": status.HTTP_422_UNPROCESSABLE_ENTITY,
+            # Convert validation errors to a safe format for JSON
+            "errors": [
+                {
+                    "loc": [str(loc) for loc in error["loc"]],
+                    "msg": str(error["msg"]),
+                    "type": str(error["type"]),
+                }
+                for error in exc.errors()
+            ],
+        }
     )
 
     # Return a structured response
@@ -253,12 +276,14 @@ async def internal_exception_handler(request: Request, exc: Exception) -> JSONRe
     # Log the exception with traceback
     logger.critical(
         "Unhandled exception",
-        exception=exc,
-        traceback=traceback.format_exc(),
-        path=request.url.path,
-        method=request.method,
-        error_id=error_id,
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        metadata={
+            "exception": exc,
+            "traceback": traceback.format_exc(),
+            "path": request.url.path,
+            "method": request.method,
+            "error_id": error_id,
+            "status_code": status.HTTP_500_INTERNAL_SERVER_ERROR,
+        }
     )
 
     # Return standardized error response

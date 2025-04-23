@@ -17,6 +17,12 @@ from app.models.terraform import (
     DeploymentStatus
 )
 
+from app.models.users import (
+    User,
+    UserTeam,
+    Token
+)
+
 # Export all models
 __all__ = [
     "Organization",
@@ -32,5 +38,8 @@ __all__ = [
     "EnvironmentStatus",
     "ResourceState",
     "ConnectionType",
-    "DeploymentStatus"
+    "DeploymentStatus",
+    "User",
+    "UserTeam",
+    "Token"
 ]

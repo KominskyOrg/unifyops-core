@@ -1,16 +1,21 @@
-from fastapi import APIRouter, Depends, Request, status, HTTPException, Query, Path
+from fastapi import APIRouter, Depends, Request, status, Query, Path
 from typing import Dict, Any, List, Optional
 import os
 from enum import Enum
 from pydantic import BaseModel
 
-from app.core.config import get_settings, Settings
+from app.config import get_settings, Settings
 from app.core.terraform import TerraformService, TerraformOperation, TerraformResult, EnvironmentGraph
-from app.core.exceptions import TerraformError, BadRequestError, NotFoundError, ErrorResponse
-from app.core.logging import get_logger
+from app.exceptions import (
+    TerraformError, 
+    BadRequestError, 
+    NotFoundError, 
+    ResourceNotFoundError,
+    ErrorResponse
+)
+from app.logging.context import get_logger
 from app.schemas.terraform import (
     ErrorResponse,
-    TerraformModule,
     TerraformInitRequest,
     TerraformPlanRequest,
     TerraformApplyRequest,
@@ -22,6 +27,7 @@ from app.schemas.terraform import (
     ModulesResponse,
     OutputsResponse,
 )
+from app.exceptions.utils import error_context, handle_database_errors
 
 # Create router with tags for documentation
 router = APIRouter(
@@ -36,7 +42,7 @@ router = APIRouter(
         },
     },
 )
-logger = get_logger("terraform.router")
+logger = get_logger("terraform.router", metadata={"router": "terraform"})
 
 # Get the base directory for Terraform modules
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -91,8 +97,8 @@ async def get_modules(
     Get available Terraform modules with optional filtering
     """
     correlation_id = getattr(request.state, "correlation_id", None)
-    logger.info("Listing available Terraform modules", correlation_id=correlation_id)
-
+    # Logging is handled by middleware, no need to log here
+    
     modules = terraform_service.get_terraform_modules()
     
     # Apply filters if provided
@@ -117,16 +123,16 @@ async def get_module_details(
     Get detailed information about a specific module
     """
     correlation_id = getattr(request.state, "correlation_id", None)
-    logger.info(f"Getting detailed information about module: {module_path}", module_path=module_path, correlation_id=correlation_id)
-
+    # Logging is handled by middleware, no need to log here
+    
     modules = terraform_service.get_terraform_modules()
     for module in modules:
         if module["path"] == module_path:
             return module
     
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND, 
-        detail=f"Module {module_path} not found"
+    raise ResourceNotFoundError(
+        resource_type="Module",
+        resource_id=module_path
     )
 
 
@@ -147,29 +153,30 @@ async def create_environment(
     
     for module_path in env_request.modules:
         if module_path not in available_paths:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Module {module_path} not found"
+            raise ResourceNotFoundError(
+                resource_type="Module",
+                resource_id=module_path
             )
     
     # Create the environment configuration
     try:
-        environment_path = environment_graph.create_environment_config(
-            modules=env_request.modules,
-            variables=env_request.variables,
-            environment_name=env_request.environment_name
-        )
-        
-        return CreateEnvironmentResponse(
-            environment_path=environment_path,
+        with error_context(
+            environment_name=env_request.environment_name,
             modules=env_request.modules
-        )
+        ):
+            environment_path = environment_graph.create_environment_config(
+                modules=env_request.modules,
+                variables=env_request.variables,
+                environment_name=env_request.environment_name
+            )
+            
+            return CreateEnvironmentResponse(
+                environment_path=environment_path,
+                modules=env_request.modules
+            )
     except Exception as e:
         logger.error(f"Failed to create environment: {str(e)}", exception=e, correlation_id=correlation_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create environment: {str(e)}"
-        )
+        raise TerraformError(message=f"Failed to create environment: {str(e)}")
 
 
 @router.post("/environments/{environment_path:path}/apply", response_model=TerraformResult)
@@ -186,23 +193,25 @@ async def apply_environment(
     logger.info(f"Applying custom environment configuration: {environment_path}", environment_path=environment_path, correlation_id=correlation_id)
 
     try:
-        # First initialize the environment
-        init_result = await terraform_service.init(environment_path)
-        if not init_result.success:
-            return init_result
-            
-        # Then apply the environment
-        return await terraform_service.apply(
-            module_path=environment_path,
-            variables=variables,
-            auto_approve=auto_approve
-        )
+        with error_context(
+            environment_path=environment_path,
+            auto_approve=auto_approve,
+            operation="apply"
+        ):
+            # First initialize the environment
+            init_result = await terraform_service.init(environment_path)
+            if not init_result.success:
+                return init_result
+                
+            # Then apply the environment
+            return await terraform_service.apply(
+                module_path=environment_path,
+                variables=variables,
+                auto_approve=auto_approve
+            )
     except Exception as e:
         logger.error(f"Failed to apply environment: {str(e)}", exception=e, environment_path=environment_path, correlation_id=correlation_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to apply environment: {str(e)}"
-        )
+        raise TerraformError(message=f"Failed to apply environment: {str(e)}")
 
 
 @router.delete("/environments/{environment_path:path}", response_model=TerraformResult)
@@ -226,10 +235,7 @@ async def destroy_environment(
         )
     except Exception as e:
         logger.error(f"Failed to destroy environment: {str(e)}", exception=e, environment_path=environment_path, correlation_id=correlation_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to destroy environment: {str(e)}"
-        )
+        raise TerraformError(message=f"Failed to destroy environment: {str(e)}")
 
 
 @router.post(
@@ -673,49 +679,19 @@ async def get_outputs(
     request: Request, module_path: str, settings: Settings = Depends(get_settings)
 ) -> Dict[str, Any]:
     """
-    Get Terraform outputs for a module.
-
-    Args:
-        request: The HTTP request
-        module_path: Path to the Terraform module relative to the tf directory
-        settings: Application settings
-
-    Returns:
-        Dict: A dictionary containing the module path and outputs
-
-    Raises:
-        NotFoundError: If the module is not found
-        TerraformError: If the terraform output operation fails
+    Get outputs from a Terraform module
     """
     correlation_id = getattr(request.state, "correlation_id", None)
-    logger.info(
-        f"Getting Terraform outputs for module: {module_path}",
-        module_path=module_path,
-        correlation_id=correlation_id,
-    )
-
+    # Logging is handled by middleware, no need to log here
+    
     try:
-        # Check if the module exists
-        full_module_path = os.path.join(TF_DIR, module_path)
-        if not os.path.exists(full_module_path):
-            raise NotFoundError(f"Module not found: {module_path}")
-
-        # Get the outputs
-        outputs = await terraform_service.output(
-            module_path=module_path, correlation_id=correlation_id
-        )
-
-        # Return the outputs
-        return {"module": module_path, "outputs": outputs}
+        # Use the service to get outputs
+        outputs = await terraform_service.output(module_path, correlation_id)
+        return OutputsResponse(module=module_path, outputs=outputs)
     except TerraformError as e:
-        # Re-raise TerraformError
         raise
-    except Exception as e:
-        # Log and wrap other exceptions
-        logger.error(
-            f"Error getting Terraform outputs for module: {module_path}",
-            exception=e,
-            module_path=module_path,
-            correlation_id=correlation_id,
+    except FileNotFoundError:
+        raise ResourceNotFoundError(
+            resource_type="Module",
+            resource_id=module_path
         )
-        raise TerraformError(str(e))

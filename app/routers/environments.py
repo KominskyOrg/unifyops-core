@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Request
+from fastapi import APIRouter, Depends, status, Query, Path, Request
 from sqlalchemy.orm import Session
 from uuid import UUID
 
@@ -20,8 +20,16 @@ from app.schemas import (
     EnvironmentDeployRequest
 )
 from app.core.terraform import TerraformService, EnvironmentGraph, TerraformOperation
-from app.core.config import settings
-from app.core.logging import get_logger
+from app.config import settings
+from app.logging.context import get_logger
+from app.exceptions import (
+    ResourceNotFoundError,
+    ResourceAlreadyExistsError,
+    TerraformError,
+    BadRequestError,
+    DatabaseError
+)
+from app.exceptions.utils import error_context, handle_database_errors
 
 router = APIRouter(
     prefix="/environments",
@@ -29,7 +37,7 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-logger = get_logger("api.environments")
+logger = get_logger("api.environments", metadata={"router": "environments"})
 
 # Create Terraform services
 terraform_service = TerraformService(settings.TERRAFORM_DIR)
@@ -44,22 +52,27 @@ async def create_environment(
     """
     Create a new environment
     """
-    # Create new environment
-    db_environment = Environment(
-        name=request.name,
-        description=request.description,
-        organization_id=str(request.organization_id),
-        team_id=str(request.team_id) if request.team_id else None,
-        created_by=request.created_by,
-        variables=request.variables,
-        tags=request.tags
-    )
-    
-    db.add(db_environment)
-    db.commit()
-    db.refresh(db_environment)
-    
-    return db_environment
+    with error_context(
+        environment_name=request.name,
+        organization_id=request.organization_id,
+        operation="create_environment"
+    ):
+        # Create new environment
+        db_environment = Environment(
+            name=request.name,
+            description=request.description,
+            organization_id=str(request.organization_id),
+            team_id=str(request.team_id) if request.team_id else None,
+            created_by=request.created_by,
+            variables=request.variables,
+            tags=request.tags
+        )
+        
+        db.add(db_environment)
+        db.commit()
+        db.refresh(db_environment)
+        
+        return db_environment
 
 
 @router.get("/", response_model=List[EnvironmentResponse])
@@ -73,16 +86,21 @@ async def list_environments(
     """
     List environments with optional filtering
     """
-    query = db.query(Environment)
-    
-    if organization_id:
-        query = query.filter(Environment.organization_id == str(organization_id))
-    
-    if team_id:
-        query = query.filter(Environment.team_id == str(team_id))
-    
-    environments = query.offset(skip).limit(limit).all()
-    return environments
+    with error_context(
+        organization_id=organization_id,
+        team_id=team_id,
+        operation="list_environments"
+    ):
+        query = db.query(Environment)
+        
+        if organization_id:
+            query = query.filter(Environment.organization_id == str(organization_id))
+        
+        if team_id:
+            query = query.filter(Environment.team_id == str(team_id))
+        
+        environments = query.offset(skip).limit(limit).all()
+        return environments
 
 
 @router.get("/{environment_id}", response_model=EnvironmentDetailResponse)
@@ -93,15 +111,16 @@ async def get_environment(
     """
     Get detailed information about an environment
     """
-    environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
-    
-    if not environment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Environment {environment_id} not found"
-        )
-    
-    return environment
+    with error_context(environment_id=environment_id, operation="get_environment"):
+        environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
+        
+        if not environment:
+            raise ResourceNotFoundError(
+                resource_type="Environment",
+                resource_id=environment_id
+            )
+        
+        return environment
 
 
 @router.put("/{environment_id}", response_model=EnvironmentResponse)
@@ -113,34 +132,35 @@ async def update_environment(
     """
     Update an environment
     """
-    environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
-    
-    if not environment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Environment {environment_id} not found"
-        )
-    
-    # Update fields if provided
-    if request.name is not None:
-        environment.name = request.name
-    
-    if request.description is not None:
-        environment.description = request.description
-    
-    if request.team_id is not None:
-        environment.team_id = str(request.team_id)
-    
-    if request.variables is not None:
-        environment.variables = request.variables
-    
-    if request.tags is not None:
-        environment.tags = request.tags
-    
-    db.commit()
-    db.refresh(environment)
-    
-    return environment
+    with error_context(environment_id=environment_id, operation="update_environment"):
+        environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
+        
+        if not environment:
+            raise ResourceNotFoundError(
+                resource_type="Environment",
+                resource_id=environment_id
+            )
+        
+        # Update fields if provided
+        if request.name is not None:
+            environment.name = request.name
+        
+        if request.description is not None:
+            environment.description = request.description
+        
+        if request.team_id is not None:
+            environment.team_id = str(request.team_id)
+        
+        if request.variables is not None:
+            environment.variables = request.variables
+        
+        if request.tags is not None:
+            environment.tags = request.tags
+        
+        db.commit()
+        db.refresh(environment)
+        
+        return environment
 
 
 @router.delete("/{environment_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -151,18 +171,19 @@ async def delete_environment(
     """
     Delete an environment (does not destroy infrastructure)
     """
-    environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
-    
-    if not environment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Environment {environment_id} not found"
-        )
-    
-    db.delete(environment)
-    db.commit()
-    
-    return None
+    with error_context(environment_id=environment_id, operation="delete_environment"):
+        environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
+        
+        if not environment:
+            raise ResourceNotFoundError(
+                resource_type="Environment",
+                resource_id=environment_id
+            )
+        
+        db.delete(environment)
+        db.commit()
+        
+        return None
 
 
 @router.post("/{environment_id}/resources", response_model=ResourceResponse)
@@ -174,32 +195,38 @@ async def add_resource(
     """
     Add a resource to an environment
     """
-    # Check if environment exists
-    environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
-    
-    if not environment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Environment {environment_id} not found"
-        )
-    
-    # Create new resource
-    db_resource = Resource(
-        name=request.name,
+    with error_context(
+        environment_id=environment_id,
+        resource_name=request.name,
         module_path=request.module_path,
-        resource_type=request.resource_type,
-        provider=request.provider,
-        environment_id=str(environment_id),
-        variables=request.variables,
-        position_x=request.position_x,
-        position_y=request.position_y
-    )
-    
-    db.add(db_resource)
-    db.commit()
-    db.refresh(db_resource)
-    
-    return db_resource
+        operation="add_resource"
+    ):
+        # Check if environment exists
+        environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
+        
+        if not environment:
+            raise ResourceNotFoundError(
+                resource_type="Environment",
+                resource_id=environment_id
+            )
+        
+        # Create new resource
+        db_resource = Resource(
+            name=request.name,
+            module_path=request.module_path,
+            resource_type=request.resource_type,
+            provider=request.provider,
+            environment_id=str(environment_id),
+            variables=request.variables,
+            position_x=request.position_x,
+            position_y=request.position_y
+        )
+        
+        db.add(db_resource)
+        db.commit()
+        db.refresh(db_resource)
+        
+        return db_resource
 
 
 @router.post("/{environment_id}/connections", response_model=ConnectionResponse)
@@ -215,9 +242,9 @@ async def add_connection(
     environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
     
     if not environment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Environment {environment_id} not found"
+        raise ResourceNotFoundError(
+            resource_type="Environment",
+            resource_id=environment_id
         )
     
     # Check if resources exist and belong to this environment
@@ -227,9 +254,9 @@ async def add_connection(
     ).first()
     
     if not source:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Source resource {request.source_id} not found in environment {environment_id}"
+        raise ResourceNotFoundError(
+            resource_type="Source resource",
+            resource_id=request.source_id
         )
     
     target = db.query(Resource).filter(
@@ -238,9 +265,9 @@ async def add_connection(
     ).first()
     
     if not target:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Target resource {request.target_id} not found in environment {environment_id}"
+        raise ResourceNotFoundError(
+            resource_type="Target resource",
+            resource_id=request.target_id
         )
     
     # Create new connection
@@ -273,9 +300,9 @@ async def save_designer_state(
     environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
     
     if not environment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Environment {environment_id} not found"
+        raise ResourceNotFoundError(
+            resource_type="Environment",
+            resource_id=environment_id
         )
     
     # Delete existing resources and connections
@@ -352,17 +379,16 @@ async def generate_terraform(
     environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
     
     if not environment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Environment {environment_id} not found"
+        raise ResourceNotFoundError(
+            resource_type="Environment",
+            resource_id=environment_id
         )
     
     # Get resources for the environment
     resources = db.query(Resource).filter(Resource.environment_id == str(environment_id)).all()
     
     if not resources:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+        raise BadRequestError(
             detail=f"Environment {environment_id} has no resources"
         )
     
@@ -391,8 +417,7 @@ async def generate_terraform(
         
     except Exception as e:
         logger.error(f"Failed to generate Terraform config: {str(e)}", environment_id=str(environment_id))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        raise TerraformError(
             detail=f"Failed to generate Terraform configuration: {str(e)}"
         )
 
@@ -410,14 +435,13 @@ async def deploy_environment(
     environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
     
     if not environment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Environment {environment_id} not found"
+        raise ResourceNotFoundError(
+            resource_type="Environment",
+            resource_id=environment_id
         )
     
     if not environment.terraform_dir:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+        raise BadRequestError(
             detail=f"Environment {environment_id} has no Terraform configuration. Generate it first."
         )
     
@@ -438,8 +462,7 @@ async def deploy_environment(
             db.add(db_deployment)
             db.commit()
             
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            raise TerraformError(
                 detail=f"Failed to initialize Terraform: {init_result.error}"
             )
         
@@ -489,20 +512,15 @@ async def deploy_environment(
         
         # If apply failed, raise exception
         if not apply_result.success:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            raise TerraformError(
                 detail=f"Failed to deploy environment: {apply_result.error}"
             )
         
         return environment
         
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
     except Exception as e:
         logger.error(f"Failed to deploy environment: {str(e)}", environment_id=str(environment_id))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        raise TerraformError(
             detail=f"Failed to deploy environment: {str(e)}"
         )
 
@@ -520,14 +538,13 @@ async def destroy_environment(
     environment = db.query(Environment).filter(Environment.id == str(environment_id)).first()
     
     if not environment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Environment {environment_id} not found"
+        raise ResourceNotFoundError(
+            resource_type="Environment",
+            resource_id=environment_id
         )
     
     if not environment.terraform_dir:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+        raise BadRequestError(
             detail=f"Environment {environment_id} has no Terraform configuration"
         )
     
@@ -535,8 +552,7 @@ async def destroy_environment(
         # First initialize Terraform
         init_result = await terraform_service.init(environment.terraform_dir)
         if not init_result.success:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            raise TerraformError(
                 detail=f"Failed to initialize Terraform: {init_result.error}"
             )
         
@@ -573,19 +589,14 @@ async def destroy_environment(
         
         # If destroy failed, raise exception
         if not destroy_result.success:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            raise TerraformError(
                 detail=f"Failed to destroy environment: {destroy_result.error}"
             )
         
         return environment
         
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
     except Exception as e:
         logger.error(f"Failed to destroy environment: {str(e)}", environment_id=str(environment_id))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        raise TerraformError(
             detail=f"Failed to destroy environment: {str(e)}"
         ) 

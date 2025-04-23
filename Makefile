@@ -17,7 +17,7 @@
 .PHONY: ecs-status ecs-logs ecs-exec ecs-deploy ecs-rollback
 
 # Environment variables with defaults
-ENV ?= dev
+ENV ?= local
 AWS_REGION ?= us-east-1
 ECR_REPOSITORY ?= $(ENV)-unifyops-api-repo
 ECR_REGISTRY ?= $(AWS_ACCOUNT).dkr.ecr.us-east-1.amazonaws.com
@@ -162,6 +162,11 @@ lint-fix:
 
 docker-build-base:
 	docker build --platform=linux/amd64 -t unifyops-core-base:latest -f docker/Dockerfile.base .
+
+docker-build-local: docker-build-base
+	docker build --platform=linux/amd64 -t unifyops-core:local -f docker/Dockerfile.local \
+		--build-arg BUILD_TIMESTAMP=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ') \
+		.
 
 docker-build-dev: docker-build-base
 	docker build --platform=linux/amd64 -t unifyops-core:dev -f docker/Dockerfile.dev \

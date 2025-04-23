@@ -3,9 +3,9 @@ import shutil
 from typing import Dict, List, Optional, Any
 import json
 
-from app.core.logging import get_logger
+from app.logging.context import get_logger
 
-logger = get_logger("terraform.templates")
+logger = get_logger("terraform.templates", metadata={"component": "terraform.templates"})
 
 
 class ModuleTemplate:

@@ -60,6 +60,7 @@ class Organization(Base):
     teams = relationship("Team", back_populates="organization")
     environments = relationship("Environment", back_populates="organization")
     cloud_credentials = relationship("CloudCredential", back_populates="organization")
+    users = relationship("User", back_populates="organization")
 
 
 class Team(Base):
@@ -76,6 +77,7 @@ class Team(Base):
     # Relationships
     organization = relationship("Organization", back_populates="teams")
     environments = relationship("Environment", back_populates="team")
+    team_users = relationship("UserTeam", back_populates="team")
 
 
 class Environment(Base):

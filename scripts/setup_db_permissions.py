@@ -33,7 +33,7 @@ try:
     import psycopg2
     from psycopg2 import sql
     from app.db.database import schema_name
-    from app.core.config import settings
+    from app.config import settings
 except ImportError as e:
     logger.error(f"Import error: {str(e)}")
     logger.error("Make sure psycopg2-binary is installed: pip install psycopg2-binary")

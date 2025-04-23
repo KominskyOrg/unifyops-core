@@ -1,9 +1,9 @@
 FROM unifyops-core-base:latest
 
 # Set environment variables
-ENV ENVIRONMENT=development \
+ENV ENVIRONMENT=local \
     LOG_LEVEL=debug \
-    API_RELOAD=false
+    API_RELOAD=true
 
 # Install development tools
 RUN pip install --no-cache-dir \

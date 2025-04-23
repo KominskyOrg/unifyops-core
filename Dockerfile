@@ -35,6 +35,9 @@ RUN curl -fsSL https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/ter
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Make sure email-validator is correctly installed (required for Pydantic 2.x)
+RUN pip install --no-cache-dir email-validator==2.0.0
+
 # Copy the rest of the application
 COPY . .
 

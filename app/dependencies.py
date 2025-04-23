@@ -4,14 +4,10 @@ import os
 
 from app.core.environment import EnvironmentService
 from app.core.terraform import TerraformService
-from app.core.config import get_settings, Settings
-
-# Base directory for Terraform operations
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TF_DIR = os.path.join(BASE_DIR, "app/tf")
+from app.config import Settings
 
 # Create services
-terraform_service = TerraformService(TF_DIR)
+terraform_service = TerraformService(Settings.TERRAFORM_DIR)
 environment_service = EnvironmentService(terraform_service)
 
 # Service dependencies

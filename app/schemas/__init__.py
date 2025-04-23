@@ -56,6 +56,29 @@ from app.schemas.terraform import (
     CreateModuleFromTemplateRequest
 )
 
+from app.schemas.users import (
+    # User schemas
+    UserBase,
+    UserCreate,
+    UserUpdate,
+    UserInDB,
+    UserResponse,
+    
+    # Authentication schemas
+    Token,
+    TokenData,
+    LoginRequest,
+    RefreshTokenRequest,
+    PasswordResetRequest,
+    PasswordResetConfirm,
+    
+    # Team assignment schemas
+    UserTeamBase,
+    UserTeamCreate,
+    UserTeamUpdate,
+    UserTeamResponse
+)
+
 # Export all schemas
 __all__ = [
     # Base schemas
@@ -110,5 +133,26 @@ __all__ = [
     "TemplateVariableResponse",
     "TemplateOutputResponse",
     "TemplateDetailsResponse",
-    "CreateModuleFromTemplateRequest"
+    "CreateModuleFromTemplateRequest",
+    
+    # User schemas
+    "UserBase",
+    "UserCreate",
+    "UserUpdate",
+    "UserInDB",
+    "UserResponse",
+    
+    # Authentication schemas
+    "Token",
+    "TokenData",
+    "LoginRequest",
+    "RefreshTokenRequest",
+    "PasswordResetRequest",
+    "PasswordResetConfirm",
+    
+    # Team assignment schemas
+    "UserTeamBase",
+    "UserTeamCreate",
+    "UserTeamUpdate",
+    "UserTeamResponse"
 ]
